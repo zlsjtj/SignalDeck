@@ -1,8 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Button, Card, Descriptions, Empty, Form, Grid, InputNumber, Popconfirm, Select, Space, Switch, Typography } from 'antd';
 
 import { NonTechGuideCard } from '@/components/common/NonTechGuideCard';
 import { ActionableErrorAlert } from '@/components/common/ActionableErrorAlert';
+import { RiskRehearsalCard } from '@/components/risk/RiskRehearsalCard';
+import { usePortfolioQuery } from '@/hooks/queries/portfolio';
 import { useRiskQuery, useUpdateRiskMutation } from '@/hooks/queries/risk';
 import { useStrategiesQuery } from '@/hooks/queries/strategies';
 import { useAppStore } from '@/store/appStore';
@@ -19,8 +21,15 @@ export function RiskPage() {
   const { data: strategies } = useStrategiesQuery();
   const { language, t } = useI18n();
   const { data, isPending, isError, refetch } = useRiskQuery(selectedStrategyId);
+  const { data: portfolioData, isPending: isPortfolioPending } = usePortfolioQuery(selectedStrategyId);
   const updateMutation = useUpdateRiskMutation();
   const [form] = Form.useForm<UpdateRiskRequest>();
+  const watchedEnabled = Form.useWatch('enabled', form);
+  const watchedMaxDrawdownPct = Form.useWatch('maxDrawdownPct', form);
+  const watchedMaxPositionPct = Form.useWatch('maxPositionPct', form);
+  const watchedMaxRiskPerTradePct = Form.useWatch('maxRiskPerTradePct', form);
+  const watchedMaxLeverage = Form.useWatch('maxLeverage', form);
+  const watchedDailyLossLimitPct = Form.useWatch('dailyLossLimitPct', form);
 
   useEffect(() => {
     if (selectedStrategyId) return;
@@ -44,6 +53,26 @@ export function RiskPage() {
     const values = await form.validateFields();
     await updateMutation.mutateAsync({ req: values, strategyId: selectedStrategyId });
   };
+
+  const rehearsalRiskParams = useMemo<UpdateRiskRequest | undefined>(() => {
+    if (!data) return undefined;
+    return {
+      enabled: watchedEnabled ?? data.enabled,
+      maxDrawdownPct: watchedMaxDrawdownPct ?? data.maxDrawdownPct,
+      maxPositionPct: watchedMaxPositionPct ?? data.maxPositionPct,
+      maxRiskPerTradePct: watchedMaxRiskPerTradePct ?? data.maxRiskPerTradePct,
+      maxLeverage: watchedMaxLeverage ?? data.maxLeverage,
+      dailyLossLimitPct: watchedDailyLossLimitPct ?? data.dailyLossLimitPct,
+    };
+  }, [
+    data,
+    watchedDailyLossLimitPct,
+    watchedEnabled,
+    watchedMaxDrawdownPct,
+    watchedMaxLeverage,
+    watchedMaxPositionPct,
+    watchedMaxRiskPerTradePct,
+  ]);
 
   return (
     <div className="page-shell">
@@ -194,6 +223,12 @@ export function RiskPage() {
           </>
         )}
       </Card>
+
+      <RiskRehearsalCard
+        loading={isPending || isPortfolioPending}
+        portfolio={portfolioData}
+        riskParams={rehearsalRiskParams}
+      />
 
       <Card title={t('triggerRecords')}>
         {!data ? (
