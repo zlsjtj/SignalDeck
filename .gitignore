@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.secrets/
+*.pem
+*.key
+*.crt
+
+# Build and cache output
+dist/
+build/
+coverage/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data
+logs/
+results/
+backup/
+backend/quant/back test/
+backend/quant/docs/*_report_*.json
+backend/quant/PROJECT_GOAL_SUMMARY.md
+frontweb/*/UX_NON_TECH_OPTIMIZATION_PLAN.md
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.csv
+*.log
+*.out
+*.parquet
+*.pkl
+*.zip
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Deployment-only document roots
+/[0-9]*_[0-9]*_[0-9]*_[0-9]*_[0-9]*/
+/www.*/
+/default/

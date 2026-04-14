@@ -1,0 +1,6 @@
+# tests/test_core.py acceptance baseline
+# Keep each case as "<ClassName>.<method_name>".
+
+CoreLogicTests.test_build_order_intents_handles_flip
+CoreLogicTests.test_factor_weights_change_scores
+CoreLogicTests.test_paper_account_applies_fee_and_positions

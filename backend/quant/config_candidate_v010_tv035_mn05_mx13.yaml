@@ -1,0 +1,96 @@
+backtest_cache: true
+backtest_skip_markets: true
+exchange: binanceusdm
+execution:
+  limit_price_offset_bps: 3
+  max_retries: 3
+  order_type: limit
+keys:
+  apiKey: ''
+  password: ''
+  secret: ''
+lookback_hours: 120
+paper: true
+paper_equity_usdt: 1000
+portfolio:
+  fee_bps: 6
+  gross_leverage: 1.05
+  max_weight_per_symbol: 1.0
+  min_order_usdt: 5
+  min_score_spread: 0.0
+  slippage_bps: 2
+position_mode: hedge
+rebalance_every_minutes: 20160
+paper_mark_to_market_interval_seconds: 5
+risk:
+  cool_off_hours: 12.0
+  dd_deleverage_ratio: 1.0
+  max_daily_loss: 0.08
+  max_strategy_dd: 0.0
+  min_margin_ratio: 1.0
+  stop_out_dd: 0.38
+strategy:
+  abs_mom_filter:
+    benchmark_symbol: BTC/USDT:USDT
+    enabled: true
+    lookback_hours: 336
+    min_return: 0.0
+    regime_gate_enabled: true
+    regime_lookback_hours: 336
+    regime_mom_threshold: -0.02
+    regime_vol_quantile: 0.3
+  breakout_filter:
+    enabled: false
+  breakout_leg:
+    enabled: false
+  dynamic_leverage:
+    enabled: false
+  ensemble:
+    enabled: false
+  funding_leg:
+    enabled: false
+  long_high_score: true
+  long_quantile: 1.0
+  regime:
+    enabled: false
+  score:
+    benchmark_symbol: BTC/USDT:USDT
+    flow_lookback: 24
+    max_vol: 0.0
+    min_notional_usdt: 0
+    mom_lookback: 6
+    trend_lookback: 72
+    use_market_neutral: false
+    vol_lookback: 12
+    volume_lookback: 24
+    w_flow: 0.0
+    w_momentum: 1.0
+    w_reversal: 0.0
+    w_trend: 0.0
+    w_volume: 0.0
+    w_volz: 0.0
+    zscore_clip: 2.5
+  short_quantile: 0.0
+  trend_leg:
+    enabled: false
+  ts_leg:
+    enabled: false
+  ts_mom_leg:
+    enabled: false
+  vol_target:
+    enabled: true
+    bench_symbol: BTC/USDT:USDT
+    lookback_hours: 336.0
+    target_annual_vol: 0.35
+    min_leverage: 0.5
+    max_leverage: 1.3
+symbols:
+- BCH/USDT:USDT
+- BNB/USDT:USDT
+- BTC/USDT:USDT
+- ETH/USDT:USDT
+- SOL/USDT:USDT
+- XRP/USDT:USDT
+- TRX/USDT:USDT
+- DOGE/USDT:USDT
+timeframe: 6h

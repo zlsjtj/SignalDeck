@@ -1,0 +1,92 @@
+groups:
+  - name: quant_db_alerts
+    rules:
+      - alert: QuantDbUnavailable
+        expr: quant_db_status{state="error"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          service: quant-api
+        annotations:
+          summary: "quant-api DB unavailable"
+          description: "health db status is error for at least 2 minutes."
+
+      - alert: QuantDbDegraded
+        expr: quant_db_status{state="degraded"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: quant-api
+        annotations:
+          summary: "quant-api DB degraded"
+          description: "runtime persistence failures exist and db is degraded."
+
+      - alert: QuantDbRuntimeFailuresIncreasing
+        expr: increase(quant_db_runtime_failures_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: quant-api
+        annotations:
+          summary: "quant-api DB runtime failures increasing"
+          description: "runtime DB persistence failures increased in the last 10 minutes."
+
+      - alert: QuantDbAlertingDisabled
+        expr: quant_db_alerting_enabled == 0
+        for: 30m
+        labels:
+          severity: info
+          service: quant-api
+        annotations:
+          summary: "quant-api DB webhook alerting disabled"
+          description: "API_DB_ALERT_WEBHOOK_URL is empty; only Prometheus alerts are active."
+
+      - alert: QuantDbFragmentationHigh
+        expr: quant_db_fragmentation_percent > 35
+        for: 30m
+        labels:
+          severity: warning
+          service: quant-api
+        annotations:
+          summary: "quant-api SQLite fragmentation high"
+          description: "fragmentation percent is above 35% for at least 30 minutes."
+
+      - alert: QuantDbFreeBytesHigh
+        expr: quant_db_free_bytes > 536870912
+        for: 30m
+        labels:
+          severity: warning
+          service: quant-api
+        annotations:
+          summary: "quant-api SQLite freelist bytes high"
+          description: "sqlite free bytes exceed 512 MiB for at least 30 minutes."
+
+      - alert: QuantDbWriteLatencyHigh
+        expr: quant_db_last_write_duration_ms > 500
+        for: 10m
+        labels:
+          severity: warning
+          service: quant-api
+        annotations:
+          summary: "quant-api DB write latency high"
+          description: "last successful DB write duration is above 500ms for at least 10 minutes."
+
+      - alert: QuantDbSlowOpsIncreasing
+        expr: increase(quant_db_write_ops_slow_total[10m]) + increase(quant_db_read_ops_slow_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: quant-api
+        annotations:
+          summary: "quant-api DB slow ops increasing"
+          description: "slow DB operations increased in the last 10 minutes."
+
+      - alert: QuantDbLockContentionIncreasing
+        expr: increase(quant_db_lock_contention_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: quant-api
+        annotations:
+          summary: "quant-api DB lock contention increasing"
+          description: "DB lock contention errors increased in the last 10 minutes."

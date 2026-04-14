@@ -1,0 +1,117 @@
+name: Quant Checks
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile
+        run: |
+          python -m py_compile statarb/backtest.py
+          python -m py_compile statarb/factors.py
+          python -m py_compile tools/walkforward_runner.py
+          python -m py_compile tools/capacity_impact_sweep.py
+          python -m py_compile tools/robustness_matrix.py
+
+      - name: Unit tests
+        run: |
+          python tools/check_test_core_baseline.py
+          python -m unittest tests.test_core -v
+          python -m unittest discover -s tests -v
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: quant
+          POSTGRES_PASSWORD: quant
+          POSTGRES_DB: quant_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U quant -d quant_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      QUANT_E2E_POSTGRES_DSN: postgresql://quant:quant@127.0.0.1:5432/quant_e2e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-postgres.txt
+
+      - name: Wait for PostgreSQL ready
+        run: |
+          python - <<'PY'
+          import os
+          import time
+          import psycopg
+
+          dsn = os.environ["QUANT_E2E_POSTGRES_DSN"]
+          deadline = time.time() + 90
+          last_error = "not ready"
+          while time.time() < deadline:
+              try:
+                  with psycopg.connect(dsn, autocommit=True, connect_timeout=3) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute("SELECT 1")
+                          cur.fetchone()
+                  print("postgres ready")
+                  raise SystemExit(0)
+              except Exception as exc:
+                  last_error = str(exc)
+                  time.sleep(1)
+          raise SystemExit(f"postgres not ready: {last_error}")
+          PY
+
+      - name: PostgreSQL regression tests
+        run: |
+          python -m unittest tests.test_postgres_store_report_summary -v
+          python -m unittest tests.test_postgres_sqlite_feature_parity_for_13_3 -v
+
+      - name: PostgreSQL E2E tool tests
+        run: |
+          python -m unittest tests.test_e2e_backend_postgres_tool -v
+
+      - name: PostgreSQL performance baseline
+        run: |
+          python tools/postgres_performance_baseline.py \
+            --postgres-dsn "$QUANT_E2E_POSTGRES_DSN" \
+            --seed-rows 1200 \
+            --write-ops 800 \
+            --commit-every 40 \
+            --pagination-queries 120 \
+            --report-queries 50 \
+            --min-write-tps 10 \
+            --max-pagination-p95-ms 300 \
+            --max-report-p95-ms 600

@@ -1,0 +1,79 @@
+exchange: binanceusdm
+paper: true
+paper_equity_usdt: 1000
+position_mode: hedge
+
+
+symbols:
+  - BCH/USDT:USDT
+  - BNB/USDT:USDT
+  - BTC/USDT:USDT
+timeframe: 6h
+lookback_hours: 120
+rebalance_every_minutes: 20160
+paper_mark_to_market_interval_seconds: 5
+strategy:
+  long_quantile: 1.0
+  short_quantile: 0.0
+  long_high_score: true
+  regime:
+    enabled: false
+  trend_leg:
+    enabled: false
+  vol_target:
+    enabled: false
+  dynamic_leverage:
+    enabled: false
+  breakout_filter:
+    enabled: false
+  ts_leg:
+    enabled: false
+  ts_mom_leg:
+    enabled: false
+  breakout_leg:
+    enabled: false
+  funding_leg:
+    enabled: false
+  ensemble:
+    enabled: false
+  score:
+    w_reversal: 0.0
+    w_momentum: 1.0
+    w_trend: 0.0
+    w_flow: 0.0
+    w_volz: 0.0
+    w_volume: 0.0
+    mom_lookback: 12
+    trend_lookback: 72
+    flow_lookback: 24
+    vol_lookback: 12
+    volume_lookback: 24
+    zscore_clip: 2.5
+    use_market_neutral: false
+    benchmark_symbol: BTC/USDT:USDT
+    min_notional_usdt: 0
+    max_vol: 0.0
+portfolio:
+  gross_leverage: 1.05
+  max_weight_per_symbol: 1.0
+  min_order_usdt: 5
+  min_score_spread: 0.0
+  fee_bps: 6
+  slippage_bps: 2
+risk:
+  max_strategy_dd: 0.0
+  dd_deleverage_ratio: 1.0
+  stop_out_dd: 0.38
+  cool_off_hours: 12.0
+  max_daily_loss: 0.08
+  min_margin_ratio: 1.0
+execution:
+  order_type: limit
+  limit_price_offset_bps: 3
+  max_retries: 3
+keys:
+  apiKey: ""
+  secret: ""
+  password: ""
+backtest_cache: true
+backtest_skip_markets: true
