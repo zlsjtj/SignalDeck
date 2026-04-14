@@ -31,3 +31,15 @@ export function useMarketKlinesQuery(symbol: string, enabled = true) {
     retry: 1,
   });
 }
+
+export function useMarketIntelSummaryQuery(symbol?: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.marketIntelSummary(symbol),
+    queryFn: () => api.getMarketIntelSummary(symbol),
+    enabled: enabled && !env.useMock,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+    staleTime: 20_000,
+    retry: 1,
+  });
+}

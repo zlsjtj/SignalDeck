@@ -6,6 +6,7 @@ import { useAppStore } from '@/store/appStore';
 
 const DashboardPage = lazy(() => import('@/pages/DashboardPage').then(({ DashboardPage }) => ({ default: DashboardPage })));
 const GettingStartedPage = lazy(() => import('@/pages/GettingStartedPage').then(({ GettingStartedPage }) => ({ default: GettingStartedPage })));
+const MarketStructurePage = lazy(() => import('@/pages/MarketStructurePage').then(({ MarketStructurePage }) => ({ default: MarketStructurePage })));
 const StrategiesPage = lazy(() => import('@/pages/StrategiesPage').then(({ StrategiesPage }) => ({ default: StrategiesPage })));
 const StrategyCreateWizardPage = lazy(() => import('@/pages/StrategyCreateWizardPage').then(({ StrategyCreateWizardPage }) => ({ default: StrategyCreateWizardPage })));
 const StrategyDetailPage = lazy(() => import('@/pages/StrategyDetailPage').then(({ StrategyDetailPage }) => ({ default: StrategyDetailPage })));
@@ -41,6 +42,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="getting-started" element={<GettingStartedPage />} />
+          <Route path="market-structure" element={<MarketStructurePage />} />
           <Route path="strategies" element={<StrategiesPage />} />
           <Route path="strategies/new" element={<StrategyCreateWizardPage />} />
           <Route path="strategies/:id" element={<StrategyDetailPage />} />

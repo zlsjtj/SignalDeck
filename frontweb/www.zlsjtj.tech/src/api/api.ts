@@ -14,6 +14,7 @@ import type {
   HealthResponse,
   LogEntry,
   LogsQueryParams,
+  MarketIntelSummary,
   Order,
   Portfolio,
   Position,
@@ -432,5 +433,19 @@ export const api = {
       .filter((v): v is Candle => Boolean(v))
       .sort((a, b) => a.time - b.time)
       .slice(-96);
+  },
+
+  async getMarketIntelSummary(symbol?: string): Promise<MarketIntelSummary> {
+    if (useQuantApi) return quantApi.getMarketIntelSummary(symbol);
+    const { data } = await http.get<MarketIntelSummary>('/market/intel/summary', {
+      params: {
+        symbol,
+        config_path: env.marketConfigPath,
+        interval: '15m',
+        lookback_bars: 96,
+        depth_limit: 20,
+      },
+    });
+    return data;
   },
 };

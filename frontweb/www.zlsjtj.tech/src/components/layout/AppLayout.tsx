@@ -7,6 +7,7 @@ import {
   BugOutlined,
   DashboardOutlined,
   ExperimentOutlined,
+  LineChartOutlined,
   QuestionCircleOutlined,
   RadarChartOutlined,
   SettingOutlined,
@@ -46,6 +47,7 @@ export function AppLayout() {
     () => [
       { key: '/getting-started', icon: <QuestionCircleOutlined />, label: <Link to="/getting-started">{byLang('新手开始', 'Getting Started')}</Link> },
       { key: '/dashboard', icon: <DashboardOutlined />, label: <Link to="/dashboard">{t('dashboard')}</Link> },
+      { key: '/market-structure', icon: <LineChartOutlined />, label: <Link to="/market-structure">{byLang('市场结构', 'Market Structure')}</Link> },
       { key: '/strategies', icon: <ExperimentOutlined />, label: <Link to="/strategies">{t('strategies')}</Link> },
       { key: '/backtests', icon: <BarChartOutlined />, label: <Link to="/backtests">{t('backtests')}</Link> },
       { key: '/live', icon: <RadarChartOutlined />, label: <Link to="/live">{t('liveMonitor')}</Link> },

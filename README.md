@@ -12,6 +12,7 @@ This is engineering tooling, not a trading signal service or financial advice.
 - Start/stop controls for strategy processes
 - Backtest runs with logs, trades, equity curves, and metrics
 - Portfolio equity, positions, orders, fills, and market data views
+- Spot/futures market structure view for order book skew, taker flow, funding, open interest, and cross-asset correlation
 - Risk limits, risk rehearsal, risk history, and audit events
 - Health, metrics, REST APIs, and WebSocket live updates
 

@@ -41,6 +41,7 @@ from postgres_store import PostgresStore
 from db_store import SQLiteStore
 from db_service import PersistenceService
 from db_repository import DBRepository
+from market_intel import cached_market_intel_summary
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -8104,6 +8105,31 @@ def market_klines(
         symbol=symbol,
         timeframe=timeframe,
         lookback_hours=lookback_hours,
+    )
+
+
+@app.get("/api/market/intel/summary")
+def market_intel_summary(
+    symbol: str = Query(default="BTCUSDT"),
+    config_path: str = Query(default=_DEFAULT_CONFIG_PATH),
+    interval: str = Query(default="15m"),
+    lookback_bars: int = Query(default=96, ge=24, le=240),
+    depth_limit: int = Query(default=20, ge=5, le=100),
+) -> Dict[str, Any]:
+    path = _resolve_config_path(config_path)
+    if not _config_available(path):
+        raise HTTPException(status_code=404, detail=f"config file not found: {path}")
+
+    cfg = _load_config_with_db_fallback(path)
+    symbols = cfg.symbols or []
+    selected_symbol = _canonicalize_symbol(symbol, symbols) if symbols else symbol
+    return cached_market_intel_summary(
+        symbols=symbols,
+        selected_symbol=selected_symbol,
+        interval=interval,
+        lookback_bars=lookback_bars,
+        depth_limit=depth_limit,
+        ttl_seconds=60,
     )
 
 

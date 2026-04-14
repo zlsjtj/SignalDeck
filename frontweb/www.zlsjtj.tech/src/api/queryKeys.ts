@@ -22,4 +22,5 @@ export const queryKeys = {
   auditLogs: (params: AuditLogsQueryParams) => ['auditLogs', params] as const,
   marketTicks: ['market', 'ticks'] as const,
   marketKlines: (symbol: string) => ['market', 'klines', symbol] as const,
+  marketIntelSummary: (symbol?: string) => ['market', 'intel', symbol ?? 'default'] as const,
 } as const;

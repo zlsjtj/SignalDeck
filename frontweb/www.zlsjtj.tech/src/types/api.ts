@@ -240,6 +240,99 @@ export type RiskEventsQueryParams = {
   cursor?: number;
 };
 
+export type MarketIntelVenue = 'spot' | 'futures';
+
+export type MarketIntelLevel = {
+  price: number;
+  qty: number;
+  notional: number;
+};
+
+export type MarketIntelOrderbook = {
+  bids: MarketIntelLevel[];
+  asks: MarketIntelLevel[];
+  bestBid: number;
+  bestAsk: number;
+  mid: number;
+  spread: number;
+  spreadPct: number;
+  bidNotional: number;
+  askNotional: number;
+  imbalance: number;
+  lastUpdateId?: number | string;
+};
+
+export type MarketIntelFlow = {
+  source: string;
+  buyQty: number;
+  sellQty: number;
+  buyNotional: number;
+  sellNotional: number;
+  takerBuyRatio: number;
+  takerBuyNotionalRatio: number;
+  tradeImbalance: number;
+  tradeCount: number;
+  latestTs: string;
+};
+
+export type MarketIntelDerivatives = {
+  fundingRate: number | null;
+  fundingTime: string;
+  openInterest: number | null;
+  openInterestChangePct: number | null;
+  periodTakerBuyRatio: number | null;
+};
+
+export type MarketIntelSessionEffect = {
+  hourUtc: number;
+  count: number;
+  avgReturnPct: number;
+  avgVolume: number;
+};
+
+export type MarketIntelVenueSnapshot = {
+  venue: MarketIntelVenue;
+  symbol: string;
+  binanceSymbol: string;
+  ok: boolean;
+  error: string;
+  orderbook: MarketIntelOrderbook | null;
+  flow: MarketIntelFlow | null;
+  volumeRatio: number;
+  sessionEffect: MarketIntelSessionEffect[];
+  derivatives: MarketIntelDerivatives | null;
+};
+
+export type MarketIntelCorrelation = {
+  venue: MarketIntelVenue;
+  symbols: string[];
+  matrix: Array<{ symbol: string; values: Record<string, number | null> }>;
+};
+
+export type MarketIntelFeedStatus = {
+  status: string;
+  message: string;
+  rows: unknown[];
+};
+
+export type MarketIntelSummary = {
+  ts: string;
+  source: string;
+  symbols: string[];
+  selectedSymbol: string;
+  selectedBinanceSymbol: string;
+  interval: string;
+  lookbackBars: number;
+  venues: Record<MarketIntelVenue, MarketIntelVenueSnapshot>;
+  correlation: MarketIntelCorrelation;
+  liquidations: MarketIntelFeedStatus;
+  news: MarketIntelFeedStatus;
+  cache?: {
+    hit: boolean;
+    ttlSeconds: number;
+  };
+};
+
 export type StrategyDiagnosticsProbe = {
   ok?: boolean;
   ts?: ISODateString;
