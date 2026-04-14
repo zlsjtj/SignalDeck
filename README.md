@@ -1,20 +1,19 @@
 # SignalDeck
 
-A quant trading console for strategy runs, backtests, live state, risk controls, and audit logs.
+Quant trading operations console for strategy runs, backtests, live state, risk controls, and audit logs.
 
-SignalDeck is a full-stack dashboard I built to make a quant trading workflow easier to operate and inspect. It combines a React control surface with a FastAPI backend that can run strategies, track paper/live trading state, persist operational data, and expose the data through REST and WebSocket endpoints.
+SignalDeck pairs a React frontend with a FastAPI backend for running strategy workflows and inspecting their state. The backend keeps operational data in PostgreSQL in deployment, can use SQLite for local smoke tests, and exposes the dashboard through REST and WebSocket endpoints.
 
-This is an engineering project, not a trading signal service. Nothing here should be treated as financial advice.
+This is engineering tooling, not a trading signal service or financial advice.
 
-## What It Does
+## Features
 
-- Manage strategy records, configs, run state, and compile jobs
-- Start, stop, and inspect strategy processes
-- Create and review backtest runs, logs, trades, equity curves, and metrics
-- Monitor portfolio equity, positions, orders, fills, and market data
-- Update and audit risk controls such as drawdown and position limits
-- Store strategies, backtests, risk state, audit logs, auth data, and time series data
-- Expose health, metrics, REST APIs, and WebSocket live updates
+- Strategy registry, configs, compile jobs, and run state
+- Start/stop controls for strategy processes
+- Backtest runs with logs, trades, equity curves, and metrics
+- Portfolio equity, positions, orders, fills, and market data views
+- Risk limits, risk history, and audit events
+- Health, metrics, REST APIs, and WebSocket live updates
 
 ## Stack
 
@@ -131,20 +130,18 @@ The frontend talks to the backend through `/api`:
 - Market data: `GET /market/ticks`, `GET /market/klines`
 - Live stream: `WS /ws`
 
-## Notes For Open Sourcing
+## Data and Secrets
 
-- Do not commit `.secrets/`, `.env.local`, database files, logs, generated backtest results, or virtual environments.
-- Replace production hostnames, API tokens, and private config values before publishing.
-- Trading exchange credentials should only be provided through local environment variables or secret files.
-- The sample configs are for development and testing. Review risk settings before connecting anything to a real exchange account.
+Runtime data and credentials are intentionally not part of the repository. Local `.env` files, `.secrets/`, databases, logs, generated backtest results, build output, and exchange keys should stay on the machine where the system runs.
 
-## Current Test Status
+Sample configuration files are for development and testing. Review the risk settings before connecting any strategy to a real exchange account.
 
-At the time this README was written:
+## Checks
 
-- Backend: `107 passed, 5 skipped`
-- Frontend: lint clean, typecheck passing, `8 passed`
-- Production build: Vite build passing
+The main local checks are:
+
+- Backend: `python -m pytest -q`
+- Frontend: `npm run lint`, `npm run typecheck`, `npm run test:run`, `npm run build`
 
 ## License
 
