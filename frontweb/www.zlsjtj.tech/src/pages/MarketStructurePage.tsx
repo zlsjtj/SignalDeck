@@ -5,7 +5,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { ActionableErrorAlert } from '@/components/common/ActionableErrorAlert';
 import { useMarketIntelSummaryQuery } from '@/hooks/queries/market';
 import { byLang } from '@/i18n';
-import type { MarketIntelLevel, MarketIntelSessionEffect, MarketIntelVenueSnapshot } from '@/types/api';
+import type { MarketIntelLevel, MarketIntelLiquidation, MarketIntelSessionEffect, MarketIntelVenueSnapshot } from '@/types/api';
 import { formatNumber, formatPercent, formatTs } from '@/utils/format';
 
 function compactSymbol(symbol: string) {
@@ -29,11 +29,12 @@ function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const ob = venue.orderbook;
   const flow = venue.flow;
   const deriv = venue.derivatives;
+  const stream = venue.stream;
   return (
     <Card
       title={
         <Space wrap>
-          <Typography.Text strong>{venue.venue === 'spot' ? 'Spot' : 'Futures'}</Typography.Text>
+          <Typography.Text strong>{venue.venue === 'spot' ? byLang('现货', 'Spot') : byLang('合约', 'Futures')}</Typography.Text>
           <Tag>{compactSymbol(venue.symbol)}</Tag>
         </Space>
       }
@@ -43,33 +44,42 @@ function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
       ) : null}
       <Row gutter={[12, 12]}>
         <Col xs={12} lg={8}>
-          <Statistic title="Mid" value={ob?.mid ?? 0} precision={2} />
+          <Statistic title={byLang('中间价', 'Mid')} value={ob?.mid ?? 0} precision={2} />
         </Col>
         <Col xs={12} lg={8}>
-          <Statistic title="Spread" value={formatPercent(ob?.spreadPct ?? 0, 3)} />
+          <Statistic title={byLang('价差', 'Spread')} value={formatPercent(ob?.spreadPct ?? 0, 3)} />
         </Col>
         <Col xs={12} lg={8}>
-          <Statistic title="Book skew" value={signedPercent(ob?.imbalance ?? 0)} valueStyle={{ color: barColor(ob?.imbalance ?? 0) }} />
+          <Statistic title={byLang('订单薄偏斜', 'Book skew')} value={signedPercent(ob?.imbalance ?? 0)} valueStyle={{ color: barColor(ob?.imbalance ?? 0) }} />
         </Col>
         <Col xs={12} lg={8}>
-          <Statistic title="Taker buy" value={formatPercent(flow?.takerBuyRatio ?? 0)} />
+          <Statistic title={byLang('主动买入', 'Taker buy')} value={formatPercent(flow?.takerBuyRatio ?? 0)} />
         </Col>
         <Col xs={12} lg={8}>
-          <Statistic title="Flow skew" value={signedPercent(flow?.tradeImbalance ?? 0)} valueStyle={{ color: barColor(flow?.tradeImbalance ?? 0) }} />
+          <Statistic title={byLang('成交流偏斜', 'Flow skew')} value={signedPercent(flow?.tradeImbalance ?? 0)} valueStyle={{ color: barColor(flow?.tradeImbalance ?? 0) }} />
         </Col>
         <Col xs={12} lg={8}>
-          <Statistic title="Volume ratio" value={`${formatNumber(venue.volumeRatio, 2)}x`} />
+          <Statistic title={byLang('量比', 'Volume ratio')} value={`${formatNumber(venue.volumeRatio, 2)}x`} />
+        </Col>
+        <Col xs={12} lg={8}>
+          <Statistic title={byLang('实时 OFI', 'Live OFI')} value={signedPercent(stream?.ofi?.ofiNorm ?? 0)} valueStyle={{ color: barColor(stream?.ofi?.ofiNorm ?? 0) }} />
+        </Col>
+        <Col xs={12} lg={8}>
+          <Statistic title={byLang('实时主动买入', 'Live taker buy')} value={formatPercent(stream?.flow?.takerBuyRatio ?? 0)} />
+        </Col>
+        <Col xs={12} lg={8}>
+          <Statistic title={byLang('实时样本', 'Live samples')} value={(stream?.ofi?.samples ?? 0) + (stream?.flow?.samples ?? 0)} />
         </Col>
         {venue.venue === 'futures' ? (
           <>
             <Col xs={12} lg={8}>
-              <Statistic title="Funding" value={deriv?.fundingRate == null ? '-' : formatPercent(deriv.fundingRate, 4)} />
+              <Statistic title={byLang('资金费率', 'Funding')} value={deriv?.fundingRate == null ? '-' : formatPercent(deriv.fundingRate, 4)} />
             </Col>
             <Col xs={12} lg={8}>
-              <Statistic title="OI change" value={deriv?.openInterestChangePct == null ? '-' : signedPercent(deriv.openInterestChangePct)} />
+              <Statistic title={byLang('持仓量变化', 'OI change')} value={deriv?.openInterestChangePct == null ? '-' : signedPercent(deriv.openInterestChangePct)} />
             </Col>
             <Col xs={12} lg={8}>
-              <Statistic title="Period taker" value={deriv?.periodTakerBuyRatio == null ? '-' : formatPercent(deriv.periodTakerBuyRatio)} />
+              <Statistic title={byLang('周期主动买入', 'Period taker buy')} value={deriv?.periodTakerBuyRatio == null ? '-' : formatPercent(deriv.periodTakerBuyRatio)} />
             </Col>
           </>
         ) : null}
@@ -103,23 +113,23 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
 
   const columns: ColumnsType<{ key: number; bid?: MarketIntelLevel; ask?: MarketIntelLevel }> = [
     {
-      title: 'Bid',
+      title: byLang('买盘', 'Bid'),
       dataIndex: 'bid',
       render: (level?: MarketIntelLevel) => level ? `${formatNumber(level.price, 2)} / ${formatNumber(level.qty, 4)}` : '-',
     },
     {
-      title: 'Bid notional',
+      title: byLang('买盘名义额', 'Bid notional'),
       dataIndex: 'bid',
       responsive: ['md'],
       render: (level?: MarketIntelLevel) => level ? formatNumber(level.notional, 0) : '-',
     },
     {
-      title: 'Ask',
+      title: byLang('卖盘', 'Ask'),
       dataIndex: 'ask',
       render: (level?: MarketIntelLevel) => level ? `${formatNumber(level.price, 2)} / ${formatNumber(level.qty, 4)}` : '-',
     },
     {
-      title: 'Ask notional',
+      title: byLang('卖盘名义额', 'Ask notional'),
       dataIndex: 'ask',
       responsive: ['md'],
       render: (level?: MarketIntelLevel) => level ? formatNumber(level.notional, 0) : '-',
@@ -194,7 +204,7 @@ function SessionEffectTable({ rows }: { rows?: MarketIntelSessionEffect[] }) {
           pagination={false}
           dataSource={topRows.map((row) => ({ ...row, key: row.hourUtc }))}
           columns={[
-            { title: 'UTC hour', dataIndex: 'hourUtc', render: (v: number) => `${String(v).padStart(2, '0')}:00` },
+            { title: byLang('UTC 小时', 'UTC hour'), dataIndex: 'hourUtc', render: (v: number) => `${String(v).padStart(2, '0')}:00` },
             { title: byLang('均值收益', 'Avg return'), dataIndex: 'avgReturnPct', render: (v: number) => signedPercent(v, 3) },
             { title: byLang('均量', 'Avg volume'), dataIndex: 'avgVolume', render: (v: number) => formatNumber(v, 2) },
             { title: byLang('样本', 'Bars'), dataIndex: 'count' },
@@ -212,6 +222,7 @@ export function MarketStructurePage() {
   const query = useMarketIntelSummaryQuery(symbol);
   const data = query.data;
   const selectedVenue = data?.venues.futures?.ok ? data.venues.futures : data?.venues.spot;
+  const liquidationRows = (data?.liquidations.rows ?? []) as MarketIntelLiquidation[];
 
   useEffect(() => {
     if (!symbol && data?.selectedSymbol) setSymbol(data.selectedSymbol);
@@ -257,8 +268,14 @@ export function MarketStructurePage() {
         <Space wrap>
           <Tag>{data?.source ?? 'binance-public'}</Tag>
           <Typography.Text type="secondary">{byLang('更新时间', 'Updated')}: {formatTs(data?.ts)}</Typography.Text>
-          <Typography.Text type="secondary">Interval: {data?.interval ?? '15m'}</Typography.Text>
-          <Typography.Text type="secondary">Cache: {data?.cache?.hit ? 'hit' : 'miss'}</Typography.Text>
+          <Typography.Text type="secondary">{byLang('周期', 'Interval')}: {data?.interval ?? '15m'}</Typography.Text>
+          <Typography.Text type="secondary">{byLang('缓存', 'Cache')}: {data?.cache?.hit ? byLang('命中', 'hit') : byLang('刷新', 'miss')}</Typography.Text>
+          <Typography.Text type="secondary">{byLang('实时流', 'Stream')}: {data?.stream?.status ?? 'stopped'}</Typography.Text>
+          {Object.entries(data?.stream?.connections ?? {}).map(([venue, conn]) => (
+            <Tag key={venue} color={conn.status === 'open' ? 'green' : conn.status === 'error' ? 'red' : 'default'}>
+              {venue === 'spot' ? byLang('现货', 'spot') : byLang('合约', 'futures')}: {conn.status}
+            </Tag>
+          ))}
         </Space>
       </Card>
 
@@ -285,12 +302,32 @@ export function MarketStructurePage() {
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card title={byLang('爆仓流', 'Liquidations')}>
-            <Typography.Text type="secondary">{data?.liquidations.message ?? '-'}</Typography.Text>
+            {liquidationRows.length === 0 ? (
+              <Typography.Text type="secondary">
+                {data?.liquidations.status === 'running'
+                  ? byLang('实时流已连接；只有发生强平时这里才会出现记录。', 'Stream is connected; rows appear only when a liquidation occurs.')
+                  : byLang('爆仓实时流未运行。', 'Liquidation stream is not running.')}
+              </Typography.Text>
+            ) : (
+              <Table
+                size="small"
+                pagination={false}
+                dataSource={liquidationRows.slice(0, 8).map((row, idx) => ({ ...row, key: `${row.ts}-${idx}` }))}
+                columns={[
+                  { title: byLang('时间', 'Time'), dataIndex: 'ts', render: (v: string) => formatTs(v) },
+                  { title: byLang('标的', 'Symbol'), dataIndex: 'symbol' },
+                  { title: byLang('方向', 'Side'), dataIndex: 'side' },
+                  { title: byLang('名义额', 'Notional'), dataIndex: 'notional', render: (v: number) => formatNumber(v, 0) },
+                ]}
+              />
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card title={byLang('新闻 NLP / 情绪', 'News NLP / sentiment')}>
-            <Typography.Text type="secondary">{data?.news.message ?? '-'}</Typography.Text>
+            <Typography.Text type="secondary">
+              {byLang('新闻情绪需要先配置新闻源或本地 NLP feed；当前未接入。', 'News sentiment needs a news source or local NLP feed; none is configured yet.')}
+            </Typography.Text>
           </Card>
         </Col>
       </Row>

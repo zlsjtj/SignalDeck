@@ -41,7 +41,7 @@ from postgres_store import PostgresStore
 from db_store import SQLiteStore
 from db_service import PersistenceService
 from db_repository import DBRepository
-from market_intel import cached_market_intel_summary
+from market_intel import cached_market_intel_summary, run_market_intel_stream_collector
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -232,6 +232,7 @@ _DEFAULT_CONFIG_PATH = os.getenv(
     "DEFAULT_STRATEGY_CONFIG_PATH",
     "config_2025_bch_bnb_btc_equal_combo_baseline_v2_invvol_best.yaml",
 )
+_MARKET_INTEL_CONFIG_PATH = os.getenv("MARKET_INTEL_CONFIG_PATH", "config_market.yaml").strip() or _DEFAULT_CONFIG_PATH
 def _read_secret_file(path_text: str) -> str:
     path = Path(path_text).expanduser()
     if not path.is_absolute():
@@ -404,6 +405,12 @@ _MARKET_TICK_REFRESHING: Dict[str, bool] = {}
 _MARKET_TICK_MIN_FETCH_MS = 2_000
 _WS_CONNECTIONS: Dict[WebSocket, Dict[str, Any]] = {}
 _WS_BROADCAST_TASK: Optional[asyncio.Task[None]] = None
+_MARKET_INTEL_STREAM_TASK: Optional[asyncio.Task[None]] = None
+_MARKET_INTEL_STREAM_ENABLED = os.getenv("MARKET_INTEL_STREAM_ENABLED", "true").strip().lower() != "false"
+_MARKET_INTEL_STREAM_SYMBOL_LIMIT = _parse_positive_int(
+    os.getenv("MARKET_INTEL_STREAM_SYMBOL_LIMIT", "4"),
+    4,
+)
 _WS_LAST_LOG_KEY: Dict[str, Optional[str]] = {}
 _WS_EQUITY_CACHE: Dict[str, Dict[str, Any]] = {}
 _WS_LOG_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -7327,7 +7334,7 @@ async def _broadcast_loop(interval: float = 1.0) -> None:
 
 @app.on_event("startup")
 async def _startup_event() -> None:
-    global _WS_BROADCAST_TASK
+    global _WS_BROADCAST_TASK, _MARKET_INTEL_STREAM_TASK
     _maybe_alert_db_init_failure()
     try:
         with _auth_user_context(_AUTH_FALLBACK_USER):
@@ -7344,16 +7351,33 @@ async def _startup_event() -> None:
         pass
     if _WS_BROADCAST_TASK is None or _WS_BROADCAST_TASK.done():
         _WS_BROADCAST_TASK = asyncio.create_task(_broadcast_loop(interval=_WS_BROADCAST_INTERVAL_SEC))
+    if _MARKET_INTEL_STREAM_ENABLED and (
+        _MARKET_INTEL_STREAM_TASK is None or _MARKET_INTEL_STREAM_TASK.done()
+    ):
+        try:
+            cfg_path = _resolve_config_path(_MARKET_INTEL_CONFIG_PATH)
+            cfg = _load_config_with_db_fallback(cfg_path) if _config_available(cfg_path) else None
+            symbols = cfg.symbols if cfg is not None else []
+        except Exception:
+            symbols = []
+        _MARKET_INTEL_STREAM_TASK = asyncio.create_task(
+            run_market_intel_stream_collector(symbols, symbol_limit=_MARKET_INTEL_STREAM_SYMBOL_LIMIT)
+        )
 
 
 @app.on_event("shutdown")
 async def _shutdown_event() -> None:
-    global _WS_BROADCAST_TASK, _STRATEGY_COMPILE_WORKER
+    global _WS_BROADCAST_TASK, _MARKET_INTEL_STREAM_TASK, _STRATEGY_COMPILE_WORKER
     if _WS_BROADCAST_TASK is not None:
         _WS_BROADCAST_TASK.cancel()
         with suppress(asyncio.CancelledError):
             await _WS_BROADCAST_TASK
         _WS_BROADCAST_TASK = None
+    if _MARKET_INTEL_STREAM_TASK is not None:
+        _MARKET_INTEL_STREAM_TASK.cancel()
+        with suppress(asyncio.CancelledError):
+            await _MARKET_INTEL_STREAM_TASK
+        _MARKET_INTEL_STREAM_TASK = None
     _stop_db_alert_outbox_worker(join_timeout=2.0)
     _STRATEGY_COMPILE_STOP.set()
     _STRATEGY_COMPILE_EVENT.set()

@@ -281,6 +281,29 @@ export type MarketIntelDerivatives = {
   openInterest: number | null;
   openInterestChangePct: number | null;
   periodTakerBuyRatio: number | null;
+  errors?: string[];
+};
+
+export type MarketIntelOfiSummary = {
+  samples: number;
+  ofi: number;
+  ofiNorm: number;
+  latestTs: string;
+};
+
+export type MarketIntelStreamFlow = {
+  samples: number;
+  buyNotional: number;
+  sellNotional: number;
+  takerBuyRatio: number;
+  imbalance: number;
+  latestTs: string;
+};
+
+export type MarketIntelVenueStream = {
+  orderbook?: MarketIntelOrderbook;
+  ofi?: MarketIntelOfiSummary;
+  flow?: MarketIntelStreamFlow;
 };
 
 export type MarketIntelSessionEffect = {
@@ -301,6 +324,7 @@ export type MarketIntelVenueSnapshot = {
   volumeRatio: number;
   sessionEffect: MarketIntelSessionEffect[];
   derivatives: MarketIntelDerivatives | null;
+  stream?: MarketIntelVenueStream;
 };
 
 export type MarketIntelCorrelation = {
@@ -315,6 +339,28 @@ export type MarketIntelFeedStatus = {
   rows: unknown[];
 };
 
+export type MarketIntelLiquidation = {
+  ts: string;
+  symbol: string;
+  side: string;
+  orderType: string;
+  status: string;
+  qty: number;
+  price: number;
+  notional: number;
+};
+
+export type MarketIntelStreamStatus = {
+  status: string;
+  startedAt: string;
+  updatedAt: string;
+  connections: Record<string, { status: string; streams: number; updatedAt: string; error?: string }>;
+  venues: Record<string, Record<string, MarketIntelVenueStream>>;
+  liquidations: MarketIntelLiquidation[];
+  errors: Array<{ ts: string; venue: string; message: string }>;
+  windowSeconds: number;
+};
+
 export type MarketIntelSummary = {
   ts: string;
   source: string;
@@ -325,6 +371,7 @@ export type MarketIntelSummary = {
   lookbackBars: number;
   venues: Record<MarketIntelVenue, MarketIntelVenueSnapshot>;
   correlation: MarketIntelCorrelation;
+  stream?: MarketIntelStreamStatus;
   liquidations: MarketIntelFeedStatus;
   news: MarketIntelFeedStatus;
   cache?: {

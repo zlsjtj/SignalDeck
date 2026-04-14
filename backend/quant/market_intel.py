@@ -1,18 +1,39 @@
+import asyncio
 import json
 import math
+import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from urllib.error import URLError
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Deque, List, Optional, Tuple
 
 
 SPOT_BASE_URL = "https://api.binance.com"
 FUTURES_BASE_URL = "https://fapi.binance.com"
 FUTURES_DATA_BASE_URL = "https://fapi.binance.com"
+SPOT_WS_BASE_URL = "wss://stream.binance.com:9443/stream"
+FUTURES_WS_BASE_URL = "wss://fstream.binance.com/stream"
 
 DEFAULT_TIMEOUT_SECONDS = 4.0
+STREAM_WINDOW_MS = 5 * 60 * 1000
+MAX_STREAM_SYMBOLS = 4
+
+
+_STREAM_LOCK = threading.Lock()
+_STREAM_STATE: Dict[str, Any] = {
+    "status": "stopped",
+    "startedAt": "",
+    "updatedAt": "",
+    "errors": deque(maxlen=20),
+    "connections": {},
+    "orderbooks": {"spot": {}, "futures": {}},
+    "ofiWindows": {"spot": {}, "futures": {}},
+    "tradeWindows": {"spot": {}, "futures": {}},
+    "liquidations": deque(maxlen=100),
+}
 
 
 def _now_iso() -> str:
@@ -80,6 +101,10 @@ def _klines_endpoint(venue: str) -> Tuple[str, str]:
 def _fetch_depth(venue: str, symbol: str, limit: int) -> Dict[str, Any]:
     base, path = _depth_endpoint(venue)
     data = _http_get_json(base, path, {"symbol": symbol, "limit": limit})
+    return _orderbook_metrics(data, venue=venue)
+
+
+def _orderbook_metrics(data: Dict[str, Any], venue: str) -> Dict[str, Any]:
     bids = _levels(data.get("bids", []))
     asks = _levels(data.get("asks", []))
     bid_notional = sum(x["notional"] for x in bids)
@@ -102,6 +127,7 @@ def _fetch_depth(venue: str, symbol: str, limit: int) -> Dict[str, Any]:
         "askNotional": ask_notional,
         "imbalance": imbalance,
         "lastUpdateId": data.get("lastUpdateId"),
+        "venue": venue,
     }
 
 
@@ -315,6 +341,258 @@ def _correlation_matrix(returns: Dict[str, List[float]]) -> List[Dict[str, Any]]
     return rows
 
 
+def _stream_symbols(symbols: List[str], limit: int = MAX_STREAM_SYMBOLS) -> List[str]:
+    out = [_binance_symbol(symbol) for symbol in symbols]
+    out = [symbol for symbol in dict.fromkeys(out) if symbol]
+    if not out:
+        out = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
+    return out[: max(1, min(int(limit), 12))]
+
+
+def _set_stream_status(status: str, *, error: str = "", venue: str = "") -> None:
+    with _STREAM_LOCK:
+        _STREAM_STATE["status"] = status
+        _STREAM_STATE["updatedAt"] = _now_iso()
+        if error:
+            _STREAM_STATE["errors"].appendleft({"ts": _now_iso(), "venue": venue, "message": error})
+
+
+def _set_connection_status(venue: str, status: str, *, streams: int = 0, error: str = "") -> None:
+    with _STREAM_LOCK:
+        _STREAM_STATE["connections"][venue] = {
+            "status": status,
+            "streams": streams,
+            "updatedAt": _now_iso(),
+            "error": error,
+        }
+        if error:
+            _STREAM_STATE["errors"].appendleft({"ts": _now_iso(), "venue": venue, "message": error})
+
+
+def _window_for(kind: str, venue: str, symbol: str, maxlen: int = 2000) -> Deque[Dict[str, Any]]:
+    bucket = _STREAM_STATE[kind][venue]
+    if symbol not in bucket:
+        bucket[symbol] = deque(maxlen=maxlen)
+    return bucket[symbol]
+
+
+def _record_depth_event(venue: str, symbol: str, payload: Dict[str, Any]) -> None:
+    normalized = {
+        "lastUpdateId": payload.get("lastUpdateId") or payload.get("u"),
+        "bids": payload.get("bids") or payload.get("b") or [],
+        "asks": payload.get("asks") or payload.get("a") or [],
+    }
+    metrics = _orderbook_metrics(normalized, venue=venue)
+    metrics["symbol"] = _ccxt_symbol(symbol, venue)
+    metrics["binanceSymbol"] = symbol
+    metrics["ts"] = _now_iso()
+    metrics["eventTimeMs"] = int(_to_float(payload.get("E") or payload.get("T"), time.time() * 1000))
+
+    with _STREAM_LOCK:
+        venue_books = _STREAM_STATE["orderbooks"][venue]
+        previous = venue_books.get(symbol)
+        venue_books[symbol] = metrics
+        if previous:
+            bid_delta = _to_float(metrics.get("bidNotional")) - _to_float(previous.get("bidNotional"))
+            ask_delta = _to_float(metrics.get("askNotional")) - _to_float(previous.get("askNotional"))
+            ofi = bid_delta - ask_delta
+            denom = _to_float(metrics.get("bidNotional")) + _to_float(metrics.get("askNotional"))
+            _window_for("ofiWindows", venue, symbol).append(
+                {
+                    "ts": metrics["ts"],
+                    "tsMs": metrics["eventTimeMs"],
+                    "ofi": ofi,
+                    "ofiNorm": ofi / denom if denom > 0 else 0.0,
+                    "bidDelta": bid_delta,
+                    "askDelta": ask_delta,
+                }
+            )
+
+
+def _record_agg_trade_event(venue: str, payload: Dict[str, Any]) -> None:
+    symbol = str(payload.get("s") or "").upper()
+    if not symbol:
+        return
+    qty = _to_float(payload.get("q"))
+    price = _to_float(payload.get("p"))
+    if qty <= 0 or price <= 0:
+        return
+    ts_ms = int(_to_float(payload.get("T") or payload.get("E"), time.time() * 1000))
+    side = "sell" if bool(payload.get("m")) else "buy"
+    with _STREAM_LOCK:
+        _window_for("tradeWindows", venue, symbol).append(
+            {
+                "ts": datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat(),
+                "tsMs": ts_ms,
+                "side": side,
+                "qty": qty,
+                "notional": qty * price,
+                "price": price,
+            }
+        )
+
+
+def _record_liquidation_event(payload: Dict[str, Any]) -> None:
+    order = payload.get("o") if isinstance(payload.get("o"), dict) else {}
+    symbol = str(order.get("s") or payload.get("s") or "").upper()
+    if not symbol:
+        return
+    qty = _to_float(order.get("z") or order.get("q") or order.get("l"))
+    price = _to_float(order.get("ap") or order.get("p"))
+    ts_ms = int(_to_float(order.get("T") or payload.get("E"), time.time() * 1000))
+    with _STREAM_LOCK:
+        _STREAM_STATE["liquidations"].appendleft(
+            {
+                "ts": datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat(),
+                "symbol": _ccxt_symbol(symbol, "futures"),
+                "side": str(order.get("S") or ""),
+                "orderType": str(order.get("o") or ""),
+                "status": str(order.get("X") or ""),
+                "qty": qty,
+                "price": price,
+                "notional": qty * price,
+            }
+        )
+
+
+def _summarize_ofi_window(venue: str, symbol: str, now_ms: int) -> Dict[str, Any]:
+    rows = list(_STREAM_STATE["ofiWindows"][venue].get(symbol) or [])
+    rows = [row for row in rows if now_ms - int(row.get("tsMs", 0)) <= STREAM_WINDOW_MS]
+    if not rows:
+        return {"samples": 0, "ofi": 0.0, "ofiNorm": 0.0, "latestTs": ""}
+    return {
+        "samples": len(rows),
+        "ofi": sum(_to_float(row.get("ofi")) for row in rows),
+        "ofiNorm": sum(_to_float(row.get("ofiNorm")) for row in rows) / len(rows),
+        "latestTs": str(rows[-1].get("ts") or ""),
+    }
+
+
+def _summarize_trade_window(venue: str, symbol: str, now_ms: int) -> Dict[str, Any]:
+    rows = list(_STREAM_STATE["tradeWindows"][venue].get(symbol) or [])
+    rows = [row for row in rows if now_ms - int(row.get("tsMs", 0)) <= STREAM_WINDOW_MS]
+    if not rows:
+        return {"samples": 0, "buyNotional": 0.0, "sellNotional": 0.0, "takerBuyRatio": 0.0, "imbalance": 0.0, "latestTs": ""}
+    buy = sum(_to_float(row.get("notional")) for row in rows if row.get("side") == "buy")
+    sell = sum(_to_float(row.get("notional")) for row in rows if row.get("side") == "sell")
+    total = buy + sell
+    return {
+        "samples": len(rows),
+        "buyNotional": buy,
+        "sellNotional": sell,
+        "takerBuyRatio": buy / total if total > 0 else 0.0,
+        "imbalance": (buy - sell) / total if total > 0 else 0.0,
+        "latestTs": str(rows[-1].get("ts") or ""),
+    }
+
+
+def market_intel_stream_snapshot(selected_symbol: str = "") -> Dict[str, Any]:
+    selected = _binance_symbol(selected_symbol)
+    now_ms = int(time.time() * 1000)
+    with _STREAM_LOCK:
+        venues: Dict[str, Any] = {}
+        for venue in ("spot", "futures"):
+            symbols = sorted(set(_STREAM_STATE["orderbooks"][venue].keys()) | set(_STREAM_STATE["tradeWindows"][venue].keys()))
+            if selected and selected in symbols:
+                symbols = [selected]
+            venues[venue] = {
+                symbol: {
+                    "orderbook": dict(_STREAM_STATE["orderbooks"][venue].get(symbol) or {}),
+                    "ofi": _summarize_ofi_window(venue, symbol, now_ms),
+                    "flow": _summarize_trade_window(venue, symbol, now_ms),
+                }
+                for symbol in symbols[:12]
+            }
+        return {
+            "status": _STREAM_STATE["status"],
+            "startedAt": _STREAM_STATE["startedAt"],
+            "updatedAt": _STREAM_STATE["updatedAt"],
+            "connections": dict(_STREAM_STATE["connections"]),
+            "venues": venues,
+            "liquidations": list(_STREAM_STATE["liquidations"])[:50],
+            "errors": list(_STREAM_STATE["errors"])[:20],
+            "windowSeconds": int(STREAM_WINDOW_MS / 1000),
+        }
+
+
+def _venue_streams(venue: str, symbols: List[str]) -> List[str]:
+    streams: List[str] = []
+    for symbol in symbols:
+        lower = symbol.lower()
+        if venue == "spot":
+            streams.extend([f"{lower}@depth20", f"{lower}@aggTrade"])
+        else:
+            streams.extend([f"{lower}@depth20@500ms", f"{lower}@aggTrade", f"{lower}@forceOrder"])
+    return streams
+
+
+def _stream_url(venue: str, streams: List[str]) -> str:
+    base = SPOT_WS_BASE_URL if venue == "spot" else FUTURES_WS_BASE_URL
+    return f"{base}?streams={'/'.join(streams)}"
+
+
+def _handle_stream_message(venue: str, payload: Dict[str, Any]) -> None:
+    stream = str(payload.get("stream") or "")
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    event = str(data.get("e") or "")
+    symbol = str(data.get("s") or stream.split("@", 1)[0]).upper()
+    if "depth" in stream or event == "depthUpdate" or "bids" in data:
+        _record_depth_event(venue, symbol, data)
+    elif event == "aggTrade":
+        _record_agg_trade_event(venue, data)
+    elif event == "forceOrder":
+        _record_liquidation_event(data)
+
+
+async def _run_market_intel_venue_stream(venue: str, symbols: List[str]) -> None:
+    import aiohttp
+
+    streams = _venue_streams(venue, symbols)
+    url = _stream_url(venue, streams)
+    backoff = 1.0
+    while True:
+        try:
+            _set_connection_status(venue, "connecting", streams=len(streams))
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(url, heartbeat=30, receive_timeout=70) as ws:
+                    _set_connection_status(venue, "open", streams=len(streams))
+                    backoff = 1.0
+                    async for msg in ws:
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                _handle_stream_message(venue, json.loads(msg.data))
+                            except Exception as exc:
+                                _set_stream_status("running", error=f"parse error: {exc}", venue=venue)
+                        elif msg.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                            break
+        except asyncio.CancelledError:
+            _set_connection_status(venue, "stopped", streams=len(streams))
+            raise
+        except Exception as exc:
+            _set_connection_status(venue, "error", streams=len(streams), error=str(exc))
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2.0, 30.0)
+
+
+async def run_market_intel_stream_collector(symbols: List[str], symbol_limit: int = MAX_STREAM_SYMBOLS) -> None:
+    stream_symbols = _stream_symbols(symbols, limit=symbol_limit)
+    if not stream_symbols:
+        _set_stream_status("disabled", error="no symbols configured")
+        return
+    with _STREAM_LOCK:
+        _STREAM_STATE["status"] = "running"
+        _STREAM_STATE["startedAt"] = _now_iso()
+        _STREAM_STATE["updatedAt"] = _STREAM_STATE["startedAt"]
+    try:
+        await asyncio.gather(
+            _run_market_intel_venue_stream("spot", stream_symbols),
+            _run_market_intel_venue_stream("futures", stream_symbols),
+        )
+    except asyncio.CancelledError:
+        _set_stream_status("stopped")
+        raise
+
+
 def build_market_intel_summary(
     *,
     symbols: List[str],
@@ -371,6 +649,15 @@ def build_market_intel_summary(
         except Exception:
             continue
 
+    stream = market_intel_stream_snapshot(selected)
+    stream_venues = stream.get("venues", {}) if isinstance(stream.get("venues"), dict) else {}
+    for venue in ("spot", "futures"):
+        venue_streams = stream_venues.get(venue, {}) if isinstance(stream_venues.get(venue), dict) else {}
+        venues[venue]["stream"] = venue_streams.get(selected) or {}
+
+    liquidations = stream.get("liquidations", []) if isinstance(stream.get("liquidations"), list) else []
+    stream_status = str(stream.get("status") or "stopped")
+
     return {
         "ts": _now_iso(),
         "source": "binance-public",
@@ -385,10 +672,13 @@ def build_market_intel_summary(
             "symbols": [_ccxt_symbol(symbol, "futures") for symbol in sorted(_returns_by_symbol(klines_for_corr).keys())],
             "matrix": _correlation_matrix(_returns_by_symbol(klines_for_corr)),
         },
+        "stream": stream,
         "liquidations": {
-            "status": "stream_not_configured",
-            "message": "Binance liquidation data is a public WebSocket stream; this snapshot endpoint does not run a collector yet.",
-            "rows": [],
+            "status": "running" if liquidations else stream_status,
+            "message": "Binance forceOrder stream is connected; rows appear only when liquidations occur."
+            if stream_status == "running"
+            else "Binance forceOrder stream is not running.",
+            "rows": liquidations,
         },
         "news": {
             "status": "source_not_configured",
