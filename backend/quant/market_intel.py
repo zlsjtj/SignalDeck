@@ -284,6 +284,7 @@ def _fetch_futures_derivatives(symbol: str, interval: str) -> Dict[str, Any]:
         "fundingTime": "",
         "openInterest": None,
         "openInterestChangePct": None,
+        "openInterestWindows": [],
         "periodTakerBuyRatio": None,
         "errors": [],
     }
@@ -311,6 +312,44 @@ def _fetch_futures_derivatives(symbol: str, interval: str) -> Dict[str, Any]:
             out["openInterestChangePct"] = latest / prev - 1.0 if prev > 0 else None
     except Exception as exc:
         out["errors"].append(f"openInterest: {exc}")
+
+    for oi_period in ("15m", "30m", "1h", "4h", "1d"):
+        try:
+            rows = _http_get_json(
+                FUTURES_DATA_BASE_URL,
+                "/futures/data/openInterestHist",
+                {"symbol": symbol, "period": oi_period, "limit": 30},
+            )
+            points: List[Dict[str, Any]] = []
+            for row in rows if isinstance(rows, list) else []:
+                ts_ms = int(_to_float(row.get("timestamp"), 0.0))
+                open_interest = _to_float(row.get("sumOpenInterest"))
+                open_interest_value = _to_float(row.get("sumOpenInterestValue"))
+                if ts_ms <= 0 or open_interest <= 0:
+                    continue
+                prev_open_interest = _to_float(points[-1].get("openInterest")) if points else 0.0
+                points.append(
+                    {
+                        "ts": datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat(),
+                        "openInterest": open_interest,
+                        "openInterestValue": open_interest_value if open_interest_value > 0 else None,
+                        "changePct": open_interest / prev_open_interest - 1.0 if prev_open_interest > 0 else None,
+                    }
+                )
+            latest = points[-1] if points else {}
+            previous = points[-2] if len(points) > 1 else {}
+            latest_oi = _to_float(latest.get("openInterest"))
+            previous_oi = _to_float(previous.get("openInterest"))
+            out["openInterestWindows"].append(
+                {
+                    "period": oi_period,
+                    "latest": latest_oi if latest_oi > 0 else None,
+                    "changePct": latest_oi / previous_oi - 1.0 if latest_oi > 0 and previous_oi > 0 else None,
+                    "points": points,
+                }
+            )
+        except Exception as exc:
+            out["errors"].append(f"openInterest[{oi_period}]: {exc}")
 
     try:
         taker = _http_get_json(

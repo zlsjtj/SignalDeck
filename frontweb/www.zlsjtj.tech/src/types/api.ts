@@ -280,6 +280,17 @@ export type MarketIntelDerivatives = {
   fundingTime: string;
   openInterest: number | null;
   openInterestChangePct: number | null;
+  openInterestWindows?: Array<{
+    period: string;
+    latest: number | null;
+    changePct: number | null;
+    points: Array<{
+      ts: string;
+      openInterest: number;
+      openInterestValue: number | null;
+      changePct: number | null;
+    }>;
+  }>;
   periodTakerBuyRatio: number | null;
   errors?: string[];
 };

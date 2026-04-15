@@ -30,8 +30,10 @@ type MiniChartPoint = {
 
 type PressureMetric = 'book' | 'flow' | 'ofi';
 type SessionTimezone = 'utc' | 'asia-shanghai';
+type OiPeriod = '15m' | '30m' | '1h' | '4h' | '1d';
 
 const PRESSURE_THRESHOLD = 0.15;
+const OI_PERIODS: OiPeriod[] = ['15m', '30m', '1h', '4h', '1d'];
 const WEEKDAY_LABELS_ZH = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const WEEKDAY_LABELS_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -223,6 +225,86 @@ function MarketSection({
         {children}
       </Space>
     </section>
+  );
+}
+
+function MetricDirectory({
+  selectedVenue,
+  liquidationCount,
+  rollingCount,
+  basisOk,
+}: {
+  selectedVenue?: MarketIntelVenueSnapshot;
+  liquidationCount: number;
+  rollingCount: number;
+  basisOk?: boolean;
+}) {
+  const deriv = selectedVenue?.derivatives;
+  const items = [
+    {
+      key: 'pressure',
+      title: byLang('盘口 / OFI / Taker', 'Book / OFI / Taker'),
+      value: signedPercent(selectedVenue?.stream?.ofi?.ofiNorm ?? selectedVenue?.flow?.tradeImbalance),
+      detail: byLang('实时压力区', 'Live pressure'),
+    },
+    {
+      key: 'volume',
+      title: byLang('成交量比率', 'Volume ratio'),
+      value: `${formatNumber(selectedVenue?.volumeRatio ?? 0, 2)}x`,
+      detail: byLang('主视角卡片', 'Primary card'),
+    },
+    {
+      key: 'oi',
+      title: byLang('持仓量变化', 'OI change'),
+      value: deriv?.openInterestChangePct == null ? '-' : signedPercent(deriv.openInterestChangePct),
+      detail: byLang('合约持仓区', 'Futures OI'),
+    },
+    {
+      key: 'funding',
+      title: byLang('资金费率', 'Funding'),
+      value: deriv?.fundingRate == null ? '-' : formatPercent(deriv.fundingRate, 4),
+      detail: byLang('合约持仓区', 'Futures OI'),
+    },
+    {
+      key: 'basis',
+      title: byLang('期现价差', 'Basis'),
+      value: basisOk ? byLang('已计算', 'ready') : byLang('等待数据', 'waiting'),
+      detail: byLang('期现结构', 'Basis'),
+    },
+    {
+      key: 'liq',
+      title: byLang('爆仓数据', 'Liquidations'),
+      value: liquidationCount,
+      detail: byLang('运行状态区', 'Runtime'),
+    },
+    {
+      key: 'corr',
+      title: byLang('跨资产相关', 'Correlation'),
+      value: rollingCount,
+      detail: byLang('跨资产区', 'Cross-asset'),
+    },
+    {
+      key: 'news',
+      title: byLang('新闻情绪', 'News sentiment'),
+      value: byLang('未配置', 'not configured'),
+      detail: byLang('未接入源', 'No source'),
+    },
+  ];
+
+  return (
+    <Card size="small" title={byLang('数据索引', 'Data index')}>
+      <Row gutter={[8, 8]}>
+        {items.map((item) => (
+          <Col key={item.key} xs={12} md={6} xl={3}>
+            <div style={{ minHeight: 82, padding: 10, border: '1px solid rgba(127,127,127,0.18)', borderRadius: 8 }}>
+              <Typography.Text type="secondary" style={{ display: 'block' }}>{item.title}</Typography.Text>
+              <Typography.Text strong style={{ display: 'block', marginTop: 4 }}>{item.value}</Typography.Text>
+              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12 }}>{item.detail}</Typography.Text>
+            </div>
+          </Col>
+        ))}
+      </Row>
+    </Card>
   );
 }
 
@@ -542,6 +624,102 @@ function BasisPanel({ basis }: { basis?: MarketIntelBasis }) {
           </Typography.Text>
         </Space>
       )}
+    </Card>
+  );
+}
+
+function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
+  const windows = venue?.derivatives?.openInterestWindows ?? [];
+  const [period, setPeriod] = useState<OiPeriod>('15m');
+  const selected = windows.find((item) => item.period === period) ?? windows[0];
+  const points = useMemo(() => selected?.points ?? [], [selected]);
+  const option = useMemo(() => {
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          const item = Array.isArray(params) ? params[0] : params;
+          const point = points[item?.dataIndex];
+          if (!point) return '';
+          return [
+            formatTs(point.ts),
+            `${byLang('持仓量', 'Open interest')}: ${formatNumber(point.openInterest, 2)}`,
+            `${byLang('变化', 'Change')}: ${point.changePct == null ? '-' : signedPercent(point.changePct, 3)}`,
+            `${byLang('名义价值', 'Notional value')}: ${point.openInterestValue == null ? '-' : formatNumber(point.openInterestValue, 0)}`,
+          ].join('<br/>');
+        },
+      },
+      grid: { left: 56, right: 18, top: 18, bottom: 34 },
+      xAxis: {
+        type: 'category',
+        data: points.map((point) => point.ts),
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: string) => formatTs(v, period === '1d' ? 'MM-DD' : 'MM-DD HH:mm') },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        scale: true,
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: number) => formatNumber(v, 0) },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      },
+      series: [
+        {
+          name: 'OI',
+          type: 'line',
+          data: points.map((point) => point.openInterest),
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 2, color: '#faad14' },
+          areaStyle: { opacity: 0.1, color: '#faad14' },
+        },
+      ],
+    };
+  }, [period, points]);
+
+  return (
+    <Card
+      title={
+        <Space wrap>
+          <Typography.Text>{byLang('合约持仓量变化', 'Futures open interest change')}</Typography.Text>
+          <Tag>OI</Tag>
+        </Space>
+      }
+      extra={
+        <Segmented
+          value={period}
+          options={OI_PERIODS.map((item) => ({ value: item, label: item }))}
+          onChange={(value) => setPeriod(value as OiPeriod)}
+        />
+      }
+    >
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Typography.Text type="secondary">
+          {byLang(
+            '这里按 15m、30m、1h、4h、1d 展示 Binance USD-M Futures 持仓量变化，用于监测合约仓位结构，不构成交易建议。',
+            'This tracks Binance USD-M Futures open interest across 15m, 30m, 1h, 4h and 1d windows to monitor positioning structure, not trading advice.',
+          )}
+        </Typography.Text>
+        {windows.length === 0 ? (
+          <Empty description={byLang('暂无持仓量历史数据', 'No open interest history yet')} />
+        ) : (
+          <>
+            <ReactECharts option={option} style={{ height: 260 }} notMerge lazyUpdate />
+            <Table
+              size="small"
+              pagination={false}
+              dataSource={windows.map((item) => ({ ...item, key: item.period }))}
+              columns={[
+                { title: byLang('周期', 'Period'), dataIndex: 'period' },
+                { title: byLang('最新持仓量', 'Latest OI'), dataIndex: 'latest', render: (v: number | null) => v == null ? '-' : formatNumber(v, 2) },
+                { title: byLang('最近变化', 'Latest change'), dataIndex: 'changePct', render: (v: number | null) => v == null ? '-' : signedPercent(v, 3) },
+                { title: byLang('样本', 'Samples'), dataIndex: 'points', render: (v: unknown[]) => v.length },
+              ]}
+            />
+          </>
+        )}
+      </Space>
     </Card>
   );
 }
@@ -1024,11 +1202,35 @@ export function MarketStructurePage() {
         </Space>
       </Card>
 
+      <MetricDirectory
+        selectedVenue={selectedVenue}
+        liquidationCount={liquidationRows.length}
+        rollingCount={data?.correlation.rolling?.length ?? 0}
+        basisOk={data?.basis?.ok}
+      />
+
       <MarketSection
-        title={byLang('实时压力与期现结构', 'Live pressure and basis')}
+        title={byLang('合约持仓与期现结构', 'Futures positioning and basis')}
         description={byLang(
-          '先看主视角与辅助视角的订单薄、主动流和 OFI，再用期现价差观察 Spot 与 Futures 的结构差异。',
-          'Start with order book, taker flow and OFI across the primary and secondary views, then use basis to monitor Spot versus Futures structure.',
+          '这里集中查看合约持仓量、资金费率和期现价差；持仓量支持 15m、30m、1h、4h、1d 多周期横坐标。',
+          'Use this section for open interest, funding and basis; OI supports 15m, 30m, 1h, 4h and 1d time axes.',
+        )}
+      >
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={14}>
+            <OpenInterestPanel venue={data?.venues.futures} />
+          </Col>
+          <Col xs={24} xl={10}>
+            <BasisPanel basis={data?.basis} />
+          </Col>
+        </Row>
+      </MarketSection>
+
+      <MarketSection
+        title={byLang('实时盘口与主动流', 'Live book and taker flow')}
+        description={byLang(
+          '这里集中查看 Level 2 订单薄、Taker ratio、OFI、volume ratio 和 Spot/Futures 主辅视角。',
+          'Use this section for Level 2 order book, Taker ratio, OFI, volume ratio and Spot/Futures primary-secondary views.',
         )}
       >
         <Row gutter={[16, 16]}>
@@ -1039,7 +1241,6 @@ export function MarketStructurePage() {
             <VenueCard venue={secondaryVenue} isPrimary={false} streamWindowSeconds={streamWindowSeconds} />
           </Col>
         </Row>
-        <BasisPanel basis={data?.basis} />
         <OrderbookTable venue={selectedVenue} />
       </MarketSection>
 
