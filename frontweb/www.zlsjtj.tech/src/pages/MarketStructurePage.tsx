@@ -323,6 +323,171 @@ function MetricDirectory({
   );
 }
 
+function SignalOverviewPanel({
+  selectedVenue,
+  basis,
+  liquidationCount,
+  rollingCount,
+}: {
+  selectedVenue?: MarketIntelVenueSnapshot;
+  basis?: MarketIntelBasis;
+  liquidationCount: number;
+  rollingCount: number;
+}) {
+  const deriv = selectedVenue?.derivatives;
+  const orderbookLevels = (selectedVenue?.orderbook?.bids?.length ?? 0) + (selectedVenue?.orderbook?.asks?.length ?? 0);
+  const sessionRows = (selectedVenue?.sessionEffect?.length ?? 0) + (selectedVenue?.sessionHeatmap?.length ?? 0);
+  const rows = [
+    {
+      key: 'volume',
+      group: byLang('成交结构', 'Trade structure'),
+      metric: byLang('成交量比率', 'Volume ratio'),
+      value: selectedVenue ? `${formatNumber(selectedVenue.volumeRatio, 2)}x` : '-',
+      status: selectedVenue?.ok ? 'ok' : 'waiting',
+      target: 'market-live-flow',
+      source: byLang('主视角 K 线聚合', 'Primary-view kline aggregation'),
+    },
+    {
+      key: 'taker',
+      group: byLang('成交结构', 'Trade structure'),
+      metric: 'Taker buy',
+      value: selectedVenue?.flow ? formatPercent(selectedVenue.flow.takerBuyRatio) : '-',
+      status: selectedVenue?.flow ? 'ok' : 'waiting',
+      target: 'market-live-flow',
+      source: byLang('Binance public trades', 'Binance public trades'),
+    },
+    {
+      key: 'ofi',
+      group: byLang('盘口压力', 'Book pressure'),
+      metric: 'OFI',
+      value: selectedVenue?.stream?.ofi ? signedPercent(selectedVenue.stream.ofi.ofiNorm) : '-',
+      status: selectedVenue?.stream?.ofi ? 'ok' : 'waiting',
+      target: 'market-live-flow',
+      source: byLang('实时订单薄滚动窗口', 'Live book rolling window'),
+    },
+    {
+      key: 'level2',
+      group: byLang('盘口压力', 'Book pressure'),
+      metric: 'Level 2',
+      value: orderbookLevels > 0 ? byLang(`${orderbookLevels} 档`, `${orderbookLevels} levels`) : '-',
+      status: orderbookLevels > 0 ? 'ok' : 'waiting',
+      target: 'market-level2',
+      source: byLang('Binance public depth', 'Binance public depth'),
+    },
+    {
+      key: 'funding',
+      group: byLang('合约结构', 'Futures structure'),
+      metric: 'Funding',
+      value: deriv?.fundingRate == null ? '-' : formatPercent(deriv.fundingRate, 4),
+      status: deriv?.fundingRate == null ? 'waiting' : 'ok',
+      target: 'market-futures-positioning',
+      source: byLang('Binance USD-M Futures public', 'Binance USD-M Futures public'),
+    },
+    {
+      key: 'oi',
+      group: byLang('合约结构', 'Futures structure'),
+      metric: byLang('持仓量变化', 'OI change'),
+      value: deriv?.openInterestChangePct == null ? '-' : signedPercent(deriv.openInterestChangePct, 3),
+      status: deriv?.openInterestChangePct == null ? 'waiting' : 'ok',
+      target: 'market-futures-positioning',
+      source: byLang('15m / 30m / 1h / 4h / 1d', '15m / 30m / 1h / 4h / 1d'),
+    },
+    {
+      key: 'basis',
+      group: byLang('合约结构', 'Futures structure'),
+      metric: byLang('期现价差', 'Basis'),
+      value: basis?.basisPct == null ? '-' : signedPercent(basis.basisPct, 3),
+      status: basis?.ok ? 'ok' : 'waiting',
+      target: 'market-futures-positioning',
+      source: byLang('Spot / Futures 中间价', 'Spot / Futures mid prices'),
+    },
+    {
+      key: 'liq',
+      group: byLang('风险事件', 'Risk events'),
+      metric: byLang('爆仓数据', 'Liquidations'),
+      value: liquidationCount,
+      status: liquidationCount > 0 ? 'ok' : 'empty',
+      target: 'market-liquidations',
+      source: byLang('Futures forceOrder stream', 'Futures forceOrder stream'),
+    },
+    {
+      key: 'session',
+      group: byLang('时间结构', 'Time structure'),
+      metric: byLang('时间段效应', 'Session effect'),
+      value: sessionRows > 0 ? sessionRows : '-',
+      status: sessionRows > 0 ? 'ok' : 'waiting',
+      target: 'market-time-structure',
+      source: byLang('历史 K 线统计', 'Historical kline stats'),
+    },
+    {
+      key: 'corr',
+      group: byLang('跨资产', 'Cross-asset'),
+      metric: byLang('实时相关', 'Correlation'),
+      value: rollingCount > 0 ? rollingCount : '-',
+      status: rollingCount > 0 ? 'ok' : 'waiting',
+      target: 'market-cross-asset',
+      source: byLang('核心交易对滚动收益', 'Core-pair rolling returns'),
+    },
+    {
+      key: 'onchain',
+      group: byLang('外部数据', 'External data'),
+      metric: byLang('链上数据', 'On-chain data'),
+      value: byLang('未配置', 'not configured'),
+      status: 'not_configured',
+      target: 'market-runtime',
+      source: byLang('等待配置数据源', 'Waiting for a configured source'),
+    },
+    {
+      key: 'news',
+      group: byLang('外部数据', 'External data'),
+      metric: byLang('新闻 NLP / 情绪', 'News NLP / sentiment'),
+      value: byLang('未配置', 'not configured'),
+      status: 'not_configured',
+      target: 'market-runtime',
+      source: byLang('等待 RSS 或本地 feed', 'Waiting for RSS or local feed'),
+    },
+  ];
+
+  const statusTag = (status: string) => {
+    if (status === 'ok') return <Tag color="green">{byLang('有数据', 'ready')}</Tag>;
+    if (status === 'empty') return <Tag>{byLang('正常空状态', 'normal empty')}</Tag>;
+    if (status === 'not_configured') return <Tag color="default">{byLang('未配置', 'not configured')}</Tag>;
+    return <Tag color="gold">{byLang('等待数据', 'waiting')}</Tag>;
+  };
+
+  return (
+    <Card
+      size="small"
+      title={byLang('信号总览', 'Signal overview')}
+      extra={<Typography.Text type="secondary">{byLang('点击位置跳到对应板块', 'Open the related section from Location')}</Typography.Text>}
+    >
+      <Table
+        size="small"
+        pagination={false}
+        dataSource={rows}
+        columns={[
+          { title: byLang('分组', 'Group'), dataIndex: 'group', responsive: ['md'] },
+          { title: byLang('指标', 'Metric'), dataIndex: 'metric' },
+          { title: byLang('当前值', 'Current'), dataIndex: 'value', render: (value: string | number) => String(value) },
+          { title: byLang('状态', 'Status'), dataIndex: 'status', render: (status: string) => statusTag(status) },
+          { title: byLang('来源 / 窗口', 'Source / window'), dataIndex: 'source', responsive: ['lg'] },
+          {
+            title: byLang('位置', 'Location'),
+            dataIndex: 'target',
+            render: (target: string) => <a href={`#${target}`}>{byLang('查看', 'Open')}</a>,
+          },
+        ]}
+      />
+      <Typography.Text type="secondary">
+        {byLang(
+          '总览只汇总监测状态和当前值；未配置的数据源不会展示模拟数据。',
+          'The overview only summarizes monitoring status and current values; unconfigured sources do not show simulated data.',
+        )}
+      </Typography.Text>
+    </Card>
+  );
+}
+
 function PressureSummary({
   values,
   streamWindowSeconds,
@@ -1270,6 +1435,13 @@ export function MarketStructurePage() {
         liquidationCount={liquidationRows.length}
         rollingCount={data?.correlation.rolling?.length ?? 0}
         basisOk={data?.basis?.ok}
+      />
+
+      <SignalOverviewPanel
+        selectedVenue={selectedVenue}
+        basis={data?.basis}
+        liquidationCount={liquidationRows.length}
+        rollingCount={data?.correlation.rolling?.length ?? 0}
       />
 
       <MarketSection
