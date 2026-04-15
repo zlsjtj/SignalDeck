@@ -1,12 +1,12 @@
 # SignalDeck
 
-Quant trading operations console for strategy runs, backtests, live state, risk controls, and audit logs.
+Operations console for crypto strategy research, backtests, live process state, risk controls, and audit logs.
 
-SignalDeck pairs a React frontend with a FastAPI backend for running strategy workflows and inspecting their state. The backend keeps operational data in PostgreSQL in deployment, can use SQLite for local smoke tests, and exposes the dashboard through REST and WebSocket endpoints.
+SignalDeck pairs a React frontend with a FastAPI backend. The backend stores operational data in PostgreSQL in deployment, can use SQLite for local smoke tests, and exposes REST and WebSocket endpoints for the dashboard.
 
 This is engineering tooling, not a trading signal service or financial advice.
 
-## Features
+## What It Includes
 
 - Strategy registry, configs, compile jobs, and run state
 - Start/stop controls for strategy processes
@@ -16,7 +16,7 @@ This is engineering tooling, not a trading signal service or financial advice.
 - Risk limits, risk rehearsal, risk history, and audit events
 - Health, metrics, REST APIs, and WebSocket live updates
 
-## Stack
+## Technology
 
 - Frontend: React 18, TypeScript, Vite, Ant Design, TanStack Query, Zustand, ECharts, Lightweight Charts
 - Backend: FastAPI, Uvicorn, pandas, NumPy, ccxt, psycopg, PostgreSQL, SQLite for local smoke tests
