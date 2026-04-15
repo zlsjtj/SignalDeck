@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Alert, Card, Col, Empty, Grid, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import ReactECharts from 'echarts-for-react';
@@ -198,6 +199,30 @@ function MiniStreamChart({
         <ReactECharts option={option} style={{ height: 146 }} notMerge lazyUpdate />
       )}
     </div>
+  );
+}
+
+function MarketSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section>
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <div>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {title}
+          </Typography.Title>
+          <Typography.Text type="secondary">{description}</Typography.Text>
+        </div>
+        {children}
+      </Space>
+    </section>
   );
 }
 
@@ -999,56 +1024,87 @@ export function MarketStructurePage() {
         </Space>
       </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={14}>
-          <VenueCard venue={selectedVenue} isPrimary streamWindowSeconds={streamWindowSeconds} />
-        </Col>
-        <Col xs={24} xl={10}>
-          <VenueCard venue={secondaryVenue} isPrimary={false} streamWindowSeconds={streamWindowSeconds} />
-        </Col>
-      </Row>
+      <MarketSection
+        title={byLang('实时压力与期现结构', 'Live pressure and basis')}
+        description={byLang(
+          '先看主视角与辅助视角的订单薄、主动流和 OFI，再用期现价差观察 Spot 与 Futures 的结构差异。',
+          'Start with order book, taker flow and OFI across the primary and secondary views, then use basis to monitor Spot versus Futures structure.',
+        )}
+      >
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={14}>
+            <VenueCard venue={selectedVenue} isPrimary streamWindowSeconds={streamWindowSeconds} />
+          </Col>
+          <Col xs={24} xl={10}>
+            <VenueCard venue={secondaryVenue} isPrimary={false} streamWindowSeconds={streamWindowSeconds} />
+          </Col>
+        </Row>
+        <BasisPanel basis={data?.basis} />
+        <OrderbookTable venue={selectedVenue} />
+      </MarketSection>
 
-      <BasisPanel basis={data?.basis} />
-
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={12}>
-          <OrderbookTable venue={selectedVenue} />
-        </Col>
-        <Col xs={24} xl={12}>
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Segmented
-              value={sessionTimezone}
-              options={[
-                { value: 'utc', label: 'UTC' },
-                { value: 'asia-shanghai', label: 'Asia-Shanghai' },
-              ]}
-              onChange={(value) => setSessionTimezone(value as SessionTimezone)}
-            />
+      <MarketSection
+        title={byLang('时间结构', 'Time structure')}
+        description={byLang(
+          '按小时和星期观察收益与成交量的历史分布；样本较少时只作为监测参考。',
+          'Monitor historical return and volume distribution by hour and weekday; sparse samples are reference context only.',
+        )}
+      >
+        <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
+          <Typography.Text type="secondary">
+            {byLang('显示时区', 'Display timezone')}: {timezoneLabel(sessionTimezone)}
+          </Typography.Text>
+          <Segmented
+            value={sessionTimezone}
+            options={[
+              { value: 'utc', label: 'UTC' },
+              { value: 'asia-shanghai', label: 'Asia-Shanghai' },
+            ]}
+            onChange={(value) => setSessionTimezone(value as SessionTimezone)}
+          />
+        </Space>
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={10}>
             <SessionEffectTable venue={selectedVenue} timezone={sessionTimezone} />
-          </Space>
-        </Col>
-      </Row>
+          </Col>
+          <Col xs={24} xl={14}>
+            <SessionHeatmap rows={selectedVenue?.sessionHeatmap} timezone={sessionTimezone} />
+          </Col>
+        </Row>
+      </MarketSection>
 
-      <SessionHeatmap rows={selectedVenue?.sessionHeatmap} timezone={sessionTimezone} />
+      <MarketSection
+        title={byLang('跨资产结构', 'Cross-asset structure')}
+        description={byLang(
+          '滚动相关展示联动关系的变化过程，矩阵保留当前截面；相关性变化只是结构监测。',
+          'Rolling correlation shows how relationships evolve, while the matrix keeps the current cross-section; correlation changes are structure monitors.',
+        )}
+      >
+        <RollingCorrelationPanel rows={data?.correlation.rolling} breaks={data?.correlation.breaks} />
+        <CorrelationHeatmap data={data?.correlation.matrix} />
+      </MarketSection>
 
-      <RollingCorrelationPanel rows={data?.correlation.rolling} breaks={data?.correlation.breaks} />
-
-      <CorrelationHeatmap data={data?.correlation.matrix} />
-
-      <StreamObservability stream={data?.stream} />
-
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={12}>
-          <LiquidationPanel rows={liquidationRows} status={data?.liquidations.status} apiAggregate={data?.liquidations.aggregate} />
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card title={byLang('新闻 NLP / 情绪', 'News NLP / sentiment')}>
-            <Typography.Text type="secondary">
-              {byLang('新闻情绪需要先配置新闻源或本地 NLP feed；当前未接入。', 'News sentiment needs a news source or local NLP feed; none is configured yet.')}
-            </Typography.Text>
-          </Card>
-        </Col>
-      </Row>
+      <MarketSection
+        title={byLang('运行状态与未配置数据源', 'Runtime and unconfigured feeds')}
+        description={byLang(
+          '检查采集器连接、爆仓流和暂未接入的数据源，区分正常空状态与数据源问题。',
+          'Check collector connections, liquidation flow and unconfigured feeds, separating normal empty states from source issues.',
+        )}
+      >
+        <StreamObservability stream={data?.stream} />
+        <Row gutter={[16, 16]}>
+          <Col xs={24} lg={12}>
+            <LiquidationPanel rows={liquidationRows} status={data?.liquidations.status} apiAggregate={data?.liquidations.aggregate} />
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card title={byLang('新闻 NLP / 情绪', 'News NLP / sentiment')}>
+              <Typography.Text type="secondary">
+                {byLang('新闻情绪需要先配置新闻源或本地 NLP feed；当前未接入。', 'News sentiment needs a news source or local NLP feed; none is configured yet.')}
+              </Typography.Text>
+            </Card>
+          </Col>
+        </Row>
+      </MarketSection>
     </div>
   );
 }
