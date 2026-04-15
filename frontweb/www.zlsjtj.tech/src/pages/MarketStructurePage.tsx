@@ -523,6 +523,50 @@ function PressureSummary({
   );
 }
 
+function MetricTile({
+  title,
+  value,
+  color,
+  detail,
+}: {
+  title: string;
+  value: ReactNode;
+  color?: string;
+  detail?: string;
+}) {
+  return (
+    <div
+      style={{
+        minHeight: 74,
+        padding: 10,
+        border: '1px solid rgba(127,127,127,0.16)',
+        borderRadius: 8,
+      }}
+    >
+      <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+        {title}
+      </Typography.Text>
+      <Typography.Text strong style={{ display: 'block', marginTop: 4, color, fontSize: 18 }}>
+        {value}
+      </Typography.Text>
+      {detail ? (
+        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 2, fontSize: 12 }}>
+          {detail}
+        </Typography.Text>
+      ) : null}
+    </div>
+  );
+}
+
+function MetricGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      <Typography.Text strong>{title}</Typography.Text>
+      <Row gutter={[8, 8]}>{children}</Row>
+    </Space>
+  );
+}
+
 function VenueCard({
   venue,
   isPrimary,
@@ -563,48 +607,76 @@ function VenueCard({
       {!venue.ok ? (
         <Alert type="warning" showIcon message={venue.error || byLang('数据源暂不可用', 'Source unavailable')} />
       ) : null}
-      <Row gutter={[12, 12]}>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('中间价', 'Mid')} value={ob?.mid ?? 0} precision={2} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('价差', 'Spread')} value={formatPercent(ob?.spreadPct ?? 0, 3)} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('订单薄偏斜', 'Book skew')} value={signedPercent(ob?.imbalance ?? 0)} valueStyle={{ color: barColor(ob?.imbalance ?? 0) }} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('主动买入', 'Taker buy')} value={formatPercent(flow?.takerBuyRatio ?? 0)} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('成交流偏斜', 'Flow skew')} value={signedPercent(flow?.tradeImbalance ?? 0)} valueStyle={{ color: barColor(flow?.tradeImbalance ?? 0) }} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('量比', 'Volume ratio')} value={`${formatNumber(venue.volumeRatio, 2)}x`} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('实时 OFI', 'Live OFI')} value={signedPercent(stream?.ofi?.ofiNorm ?? 0)} valueStyle={{ color: barColor(stream?.ofi?.ofiNorm ?? 0) }} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('实时主动买入', 'Live taker buy')} value={formatPercent(stream?.flow?.takerBuyRatio ?? 0)} />
-        </Col>
-        <Col xs={12} lg={8}>
-          <Statistic title={byLang('实时样本', 'Live samples')} value={(stream?.ofi?.samples ?? 0) + (stream?.flow?.samples ?? 0)} />
-        </Col>
+      <Space direction="vertical" size={14} style={{ width: '100%' }}>
+        <MetricGroup title={byLang('价格与盘口', 'Price and book')}>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('中间价', 'Mid')} value={formatNumber(ob?.mid ?? 0, 2)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('价差', 'Spread')} value={formatPercent(ob?.spreadPct ?? 0, 3)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile
+              title={byLang('订单薄偏斜', 'Book skew')}
+              value={signedPercent(ob?.imbalance ?? 0)}
+              color={barColor(ob?.imbalance ?? 0)}
+              detail={pressureText(ob?.imbalance)}
+            />
+          </Col>
+        </MetricGroup>
+
+        <MetricGroup title={byLang('主动成交', 'Taker flow')}>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('主动买入', 'Taker buy')} value={formatPercent(flow?.takerBuyRatio ?? 0)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile
+              title={byLang('成交流偏斜', 'Flow skew')}
+              value={signedPercent(flow?.tradeImbalance ?? 0)}
+              color={barColor(flow?.tradeImbalance ?? 0)}
+              detail={pressureText(flow?.tradeImbalance)}
+            />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('量比', 'Volume ratio')} value={`${formatNumber(venue.volumeRatio, 2)}x`} />
+          </Col>
+        </MetricGroup>
+
+        <MetricGroup title={byLang('实时窗口', 'Live window')}>
+          <Col xs={12} lg={8}>
+            <MetricTile
+              title={byLang('实时 OFI', 'Live OFI')}
+              value={signedPercent(stream?.ofi?.ofiNorm ?? 0)}
+              color={barColor(stream?.ofi?.ofiNorm ?? 0)}
+              detail={pressureText(stream?.ofi?.ofiNorm)}
+            />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('实时主动买入', 'Live taker buy')} value={formatPercent(stream?.flow?.takerBuyRatio ?? 0)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('实时样本', 'Live samples')} value={(stream?.ofi?.samples ?? 0) + (stream?.flow?.samples ?? 0)} />
+          </Col>
+        </MetricGroup>
+
         {venue.venue === 'futures' ? (
-          <>
+          <MetricGroup title={byLang('合约结构', 'Futures structure')}>
             <Col xs={12} lg={8}>
-              <Statistic title={byLang('资金费率', 'Funding')} value={deriv?.fundingRate == null ? '-' : formatPercent(deriv.fundingRate, 4)} />
+              <MetricTile title={byLang('资金费率', 'Funding')} value={deriv?.fundingRate == null ? '-' : formatPercent(deriv.fundingRate, 4)} />
             </Col>
             <Col xs={12} lg={8}>
-              <Statistic title={byLang('持仓量变化', 'OI change')} value={deriv?.openInterestChangePct == null ? '-' : signedPercent(deriv.openInterestChangePct)} />
+              <MetricTile
+                title={byLang('持仓量变化', 'OI change')}
+                value={deriv?.openInterestChangePct == null ? '-' : signedPercent(deriv.openInterestChangePct)}
+                color={deriv?.openInterestChangePct == null ? undefined : barColor(deriv.openInterestChangePct)}
+              />
             </Col>
             <Col xs={12} lg={8}>
-              <Statistic title={byLang('周期主动买入', 'Period taker buy')} value={deriv?.periodTakerBuyRatio == null ? '-' : formatPercent(deriv.periodTakerBuyRatio)} />
+              <MetricTile title={byLang('周期主动买入', 'Period taker buy')} value={deriv?.periodTakerBuyRatio == null ? '-' : formatPercent(deriv.periodTakerBuyRatio)} />
             </Col>
-          </>
+          </MetricGroup>
         ) : null}
-      </Row>
+      </Space>
       <div style={{ marginTop: 12 }}>
         <Progress
           percent={Math.round(((ob?.imbalance ?? 0) + 1) * 50)}
