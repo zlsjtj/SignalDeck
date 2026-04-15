@@ -7,6 +7,7 @@ import { ActionableErrorAlert } from '@/components/common/ActionableErrorAlert';
 import { useMarketIntelSummaryQuery } from '@/hooks/queries/market';
 import { byLang } from '@/i18n';
 import type {
+  MarketIntelBasis,
   MarketIntelLevel,
   MarketIntelLiquidation,
   MarketIntelLiquidationAggregate,
@@ -466,6 +467,55 @@ function CorrelationHeatmap({ data }: { data?: Array<{ symbol: string; values: R
             </tbody>
           </table>
         </div>
+      )}
+    </Card>
+  );
+}
+
+function BasisPanel({ basis }: { basis?: MarketIntelBasis }) {
+  const basisPct = basis?.basisPct;
+  const color = basisPct == null ? undefined : basisPct > 0 ? '#ff4d4f' : basisPct < 0 ? '#1677ff' : '#52c41a';
+
+  return (
+    <Card title={byLang('期现价差', 'Spot-futures basis')}>
+      {!basis?.ok ? (
+        <Alert
+          type="info"
+          showIcon
+          message={byLang('期现价差暂不可用', 'Spot-futures basis unavailable')}
+          description={byLang(
+            '需要同时取得 Spot 和 Futures 中间价后才能计算。',
+            'Both Spot and Futures mid prices are required before basis can be calculated.',
+          )}
+        />
+      ) : (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row gutter={[12, 12]}>
+            <Col xs={12} md={6}>
+              <Statistic title="Spot Mid" value={basis.spotMid ?? 0} precision={2} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title="Futures Mid" value={basis.futuresMid ?? 0} precision={2} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('价差', 'Basis')} value={basis.basis ?? 0} precision={2} valueStyle={{ color }} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('价差比例', 'Basis pct')} value={basisPct == null ? '-' : signedPercent(basisPct, 3)} valueStyle={{ color }} />
+            </Col>
+          </Row>
+          <Progress
+            percent={Math.min(100, Math.round(Math.abs(basisPct ?? 0) * 5000))}
+            showInfo={false}
+            strokeColor={color}
+          />
+          <Typography.Text type="secondary">
+            {byLang(
+              '期现价差使用公开 Spot 和 USD-M Futures 中间价计算，用于监测期现结构变化，不构成交易建议。',
+              'Basis is computed from public Spot and USD-M Futures mid prices to monitor structure changes; it is not trading advice.',
+            )}
+          </Typography.Text>
+        </Space>
       )}
     </Card>
   );
@@ -957,6 +1007,8 @@ export function MarketStructurePage() {
           <VenueCard venue={secondaryVenue} isPrimary={false} streamWindowSeconds={streamWindowSeconds} />
         </Col>
       </Row>
+
+      <BasisPanel basis={data?.basis} />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>

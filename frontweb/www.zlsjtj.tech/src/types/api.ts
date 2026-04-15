@@ -387,6 +387,16 @@ export type MarketIntelCorrelation = {
   breaks?: MarketIntelCorrelationBreak[];
 };
 
+export type MarketIntelBasis = {
+  ok: boolean;
+  spotMid: number | null;
+  futuresMid: number | null;
+  basis: number | null;
+  basisPct: number | null;
+  status: string;
+  message: string;
+};
+
 export type MarketIntelFeedStatus = {
   status: string;
   message: string;
@@ -443,6 +453,7 @@ export type MarketIntelSummary = {
   lookbackBars: number;
   venues: Record<MarketIntelVenue, MarketIntelVenueSnapshot>;
   correlation: MarketIntelCorrelation;
+  basis?: MarketIntelBasis;
   stream?: MarketIntelStreamStatus;
   liquidations: MarketIntelFeedStatus;
   news: MarketIntelFeedStatus;

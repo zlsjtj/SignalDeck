@@ -462,6 +462,23 @@ def _correlation_breaks(rolling: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return breaks[:8]
 
 
+def _basis_metrics(venues: Dict[str, Any]) -> Dict[str, Any]:
+    spot_ob = venues.get("spot", {}).get("orderbook") if isinstance(venues.get("spot"), dict) else None
+    futures_ob = venues.get("futures", {}).get("orderbook") if isinstance(venues.get("futures"), dict) else None
+    spot_mid = _to_float(spot_ob.get("mid")) if isinstance(spot_ob, dict) else 0.0
+    futures_mid = _to_float(futures_ob.get("mid")) if isinstance(futures_ob, dict) else 0.0
+    basis = futures_mid - spot_mid if spot_mid > 0 and futures_mid > 0 else 0.0
+    return {
+        "ok": spot_mid > 0 and futures_mid > 0,
+        "spotMid": spot_mid if spot_mid > 0 else None,
+        "futuresMid": futures_mid if futures_mid > 0 else None,
+        "basis": basis if spot_mid > 0 and futures_mid > 0 else None,
+        "basisPct": basis / spot_mid if spot_mid > 0 and futures_mid > 0 else None,
+        "status": "ok" if spot_mid > 0 and futures_mid > 0 else "insufficient_data",
+        "message": "Spot-futures basis is computed from public Spot and USD-M futures mid prices.",
+    }
+
+
 def _stream_symbols(symbols: List[str], limit: int = MAX_STREAM_SYMBOLS) -> List[str]:
     out = [_binance_symbol(symbol) for symbol in symbols]
     out = [symbol for symbol in dict.fromkeys(out) if symbol]
@@ -956,6 +973,7 @@ def build_market_intel_summary(
             "rolling": rolling_corr,
             "breaks": _correlation_breaks(rolling_corr),
         },
+        "basis": _basis_metrics(venues),
         "stream": stream,
         "liquidations": {
             "status": "running" if liquidations else stream_status,
