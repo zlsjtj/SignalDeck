@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Alert, Card, Col, Empty, Grid, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Empty, Grid, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import ReactECharts from 'echarts-for-react';
 
@@ -15,6 +15,7 @@ import type {
   MarketIntelRollingCorrelation,
   MarketIntelSessionHeatmapCell,
   MarketIntelStreamStatus,
+  MarketIntelSummary,
   MarketIntelVenue,
   MarketIntelVenueSnapshot,
 } from '@/types/api';
@@ -484,6 +485,78 @@ function SignalOverviewPanel({
           'The overview only summarizes monitoring status and current values; unconfigured sources do not show simulated data.',
         )}
       </Typography.Text>
+    </Card>
+  );
+}
+
+function MarketContextPanel({
+  data,
+  primaryVenue,
+  streamWindowLabel,
+  loading,
+  refreshing,
+  onRefresh,
+}: {
+  data?: MarketIntelSummary;
+  primaryVenue: MarketIntelVenue;
+  streamWindowLabel?: string;
+  loading: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const connections = Object.entries(data?.stream?.connections ?? {});
+  const source = data?.source ?? 'binance-public';
+  const cacheText = data?.cache?.hit ? byLang('命中', 'hit') : byLang('刷新', 'miss');
+
+  return (
+    <Card
+      size="small"
+      loading={loading}
+      title={byLang('当前上下文', 'Current context')}
+      extra={
+        <Button size="small" loading={refreshing && !loading} onClick={onRefresh}>
+          {byLang('刷新', 'Refresh')}
+        </Button>
+      }
+    >
+      <Row gutter={[12, 12]}>
+        <Col xs={12} md={6} xl={4}>
+          <Typography.Text type="secondary" style={{ display: 'block' }}>{byLang('数据源', 'Source')}</Typography.Text>
+          <Tag style={{ marginTop: 4 }}>{source}</Tag>
+        </Col>
+        <Col xs={12} md={6} xl={4}>
+          <Typography.Text type="secondary" style={{ display: 'block' }}>{byLang('主视角', 'Primary view')}</Typography.Text>
+          <Tag color="red" style={{ marginTop: 4 }}>{primaryVenue === 'spot' ? 'Spot' : 'Futures'}</Tag>
+        </Col>
+        <Col xs={12} md={6} xl={4}>
+          <Typography.Text type="secondary" style={{ display: 'block' }}>{byLang('更新时间', 'Updated')}</Typography.Text>
+          <Typography.Text strong>{formatTs(data?.ts)}</Typography.Text>
+        </Col>
+        <Col xs={12} md={6} xl={4}>
+          <Typography.Text type="secondary" style={{ display: 'block' }}>{byLang('周期', 'Interval')}</Typography.Text>
+          <Typography.Text strong>{data?.interval ?? '15m'}</Typography.Text>
+        </Col>
+        <Col xs={12} md={6} xl={4}>
+          <Typography.Text type="secondary" style={{ display: 'block' }}>{byLang('实时窗口', 'Live window')}</Typography.Text>
+          <Typography.Text strong>{streamWindowLabel ?? '-'}</Typography.Text>
+        </Col>
+        <Col xs={12} md={6} xl={4}>
+          <Typography.Text type="secondary" style={{ display: 'block' }}>{byLang('缓存', 'Cache')}</Typography.Text>
+          <Typography.Text strong>{cacheText}</Typography.Text>
+        </Col>
+      </Row>
+      <Space wrap style={{ marginTop: 12 }}>
+        <Typography.Text type="secondary">{byLang('实时流', 'Stream')}: {data?.stream?.status ?? 'stopped'}</Typography.Text>
+        {connections.length === 0 ? (
+          <Tag>{byLang('等待连接状态', 'waiting for connections')}</Tag>
+        ) : (
+          connections.map(([venue, conn]) => (
+            <Tag key={venue} color={conn.status === 'open' ? 'green' : conn.status === 'error' ? 'red' : 'default'}>
+              {venue === 'spot' ? 'Spot' : 'Futures'}: {conn.status}
+            </Tag>
+          ))
+        )}
+      </Space>
     </Card>
   );
 }
@@ -1485,22 +1558,14 @@ export function MarketStructurePage() {
         />
       ) : null}
 
-      <Card size="small" loading={query.isPending}>
-        <Space wrap>
-          <Tag>{data?.source ?? 'binance-public'}</Tag>
-          <Tag color="red">{byLang('主视角', 'Primary view')}: {primaryVenue === 'spot' ? 'Spot' : 'Futures'}</Tag>
-          <Typography.Text type="secondary">{byLang('更新时间', 'Updated')}: {formatTs(data?.ts)}</Typography.Text>
-          <Typography.Text type="secondary">{byLang('周期', 'Interval')}: {data?.interval ?? '15m'}</Typography.Text>
-          <Typography.Text type="secondary">{byLang('实时窗口', 'Live window')}: {streamWindowOptions.find((item) => item.value === (data?.stream?.windowSeconds ?? streamWindowSeconds))?.label}</Typography.Text>
-          <Typography.Text type="secondary">{byLang('缓存', 'Cache')}: {data?.cache?.hit ? byLang('命中', 'hit') : byLang('刷新', 'miss')}</Typography.Text>
-          <Typography.Text type="secondary">{byLang('实时流', 'Stream')}: {data?.stream?.status ?? 'stopped'}</Typography.Text>
-          {Object.entries(data?.stream?.connections ?? {}).map(([venue, conn]) => (
-            <Tag key={venue} color={conn.status === 'open' ? 'green' : conn.status === 'error' ? 'red' : 'default'}>
-              {venue === 'spot' ? byLang('现货', 'spot') : byLang('合约', 'futures')}: {conn.status}
-            </Tag>
-          ))}
-        </Space>
-      </Card>
+      <MarketContextPanel
+        data={data}
+        primaryVenue={primaryVenue}
+        streamWindowLabel={streamWindowOptions.find((item) => item.value === (data?.stream?.windowSeconds ?? streamWindowSeconds))?.label}
+        loading={query.isPending}
+        refreshing={query.isFetching}
+        onRefresh={() => void query.refetch()}
+      />
 
       <MetricDirectory
         selectedVenue={selectedVenue}
