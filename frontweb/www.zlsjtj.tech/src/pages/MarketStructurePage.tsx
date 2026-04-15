@@ -205,16 +205,18 @@ function MiniStreamChart({
 }
 
 function MarketSection({
+  id,
   title,
   description,
   children,
 }: {
+  id: string;
   title: string;
   description: string;
   children: ReactNode;
 }) {
   return (
-    <section>
+    <section id={id} style={{ scrollMarginTop: 84 }}>
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
         <div>
           <Typography.Title level={4} style={{ margin: 0 }}>
@@ -240,51 +242,69 @@ function MetricDirectory({
   basisOk?: boolean;
 }) {
   const deriv = selectedVenue?.derivatives;
+  const scrollToSection = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
   const items = [
     {
       key: 'pressure',
+      target: 'market-live-flow',
       title: byLang('盘口 / OFI / Taker', 'Book / OFI / Taker'),
       value: signedPercent(selectedVenue?.stream?.ofi?.ofiNorm ?? selectedVenue?.flow?.tradeImbalance),
       detail: byLang('实时压力区', 'Live pressure'),
     },
     {
       key: 'volume',
+      target: 'market-live-flow',
       title: byLang('成交量比率', 'Volume ratio'),
       value: `${formatNumber(selectedVenue?.volumeRatio ?? 0, 2)}x`,
       detail: byLang('主视角卡片', 'Primary card'),
     },
     {
       key: 'oi',
+      target: 'market-futures-positioning',
       title: byLang('持仓量变化', 'OI change'),
       value: deriv?.openInterestChangePct == null ? '-' : signedPercent(deriv.openInterestChangePct),
       detail: byLang('合约持仓区', 'Futures OI'),
     },
     {
       key: 'funding',
+      target: 'market-futures-positioning',
       title: byLang('资金费率', 'Funding'),
       value: deriv?.fundingRate == null ? '-' : formatPercent(deriv.fundingRate, 4),
       detail: byLang('合约持仓区', 'Futures OI'),
     },
     {
       key: 'basis',
+      target: 'market-futures-positioning',
       title: byLang('期现价差', 'Basis'),
       value: basisOk ? byLang('已计算', 'ready') : byLang('等待数据', 'waiting'),
       detail: byLang('期现结构', 'Basis'),
     },
     {
+      key: 'level2',
+      target: 'market-level2',
+      title: byLang('Level 2 订单薄', 'Level 2 book'),
+      value: selectedVenue?.orderbook?.bids?.length ?? 0,
+      detail: byLang('订单薄区', 'Book section'),
+    },
+    {
       key: 'liq',
+      target: 'market-liquidations',
       title: byLang('爆仓数据', 'Liquidations'),
       value: liquidationCount,
-      detail: byLang('运行状态区', 'Runtime'),
+      detail: byLang('爆仓流区', 'Liquidation flow'),
     },
     {
       key: 'corr',
+      target: 'market-cross-asset',
       title: byLang('跨资产相关', 'Correlation'),
       value: rollingCount,
       detail: byLang('跨资产区', 'Cross-asset'),
     },
     {
       key: 'news',
+      target: 'market-runtime',
       title: byLang('新闻情绪', 'News sentiment'),
       value: byLang('未配置', 'not configured'),
       detail: byLang('未接入源', 'No source'),
@@ -296,11 +316,25 @@ function MetricDirectory({
       <Row gutter={[8, 8]}>
         {items.map((item) => (
           <Col key={item.key} xs={12} md={6} xl={3}>
-            <div style={{ minHeight: 82, padding: 10, border: '1px solid rgba(127,127,127,0.18)', borderRadius: 8 }}>
+            <button
+              type="button"
+              onClick={() => scrollToSection(item.target)}
+              style={{
+                width: '100%',
+                minHeight: 82,
+                padding: 10,
+                border: '1px solid rgba(127,127,127,0.18)',
+                borderRadius: 8,
+                background: 'transparent',
+                color: 'inherit',
+                textAlign: 'left',
+                cursor: 'pointer',
+              }}
+            >
               <Typography.Text type="secondary" style={{ display: 'block' }}>{item.title}</Typography.Text>
               <Typography.Text strong style={{ display: 'block', marginTop: 4 }}>{item.value}</Typography.Text>
               <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12 }}>{item.detail}</Typography.Text>
-            </div>
+            </button>
           </Col>
         ))}
       </Row>
@@ -1210,6 +1244,7 @@ export function MarketStructurePage() {
       />
 
       <MarketSection
+        id="market-futures-positioning"
         title={byLang('合约持仓与期现结构', 'Futures positioning and basis')}
         description={byLang(
           '这里集中查看合约持仓量、资金费率和期现价差；持仓量支持 15m、30m、1h、4h、1d 多周期横坐标。',
@@ -1227,6 +1262,7 @@ export function MarketStructurePage() {
       </MarketSection>
 
       <MarketSection
+        id="market-live-flow"
         title={byLang('实时盘口与主动流', 'Live book and taker flow')}
         description={byLang(
           '这里集中查看 Level 2 订单薄、Taker ratio、OFI、volume ratio 和 Spot/Futures 主辅视角。',
@@ -1241,10 +1277,32 @@ export function MarketStructurePage() {
             <VenueCard venue={secondaryVenue} isPrimary={false} streamWindowSeconds={streamWindowSeconds} />
           </Col>
         </Row>
+      </MarketSection>
+
+      <MarketSection
+        id="market-level2"
+        title={byLang('Level 2 订单薄', 'Level 2 order book')}
+        description={byLang(
+          '这里只放主视角订单薄快照，方便查看买卖盘价格、数量和名义额。',
+          'This section only shows the primary-view book snapshot for bid/ask price, quantity and notional.',
+        )}
+      >
         <OrderbookTable venue={selectedVenue} />
       </MarketSection>
 
       <MarketSection
+        id="market-liquidations"
+        title={byLang('爆仓流', 'Liquidation flow')}
+        description={byLang(
+          '这里集中查看最近强平记录、多空名义额和最近 5 分钟比例；没有爆仓不是错误。',
+          'Use this section for recent forced orders, long/short notional and last-5m ratio; no liquidation is not an error.',
+        )}
+      >
+        <LiquidationPanel rows={liquidationRows} status={data?.liquidations.status} apiAggregate={data?.liquidations.aggregate} />
+      </MarketSection>
+
+      <MarketSection
+        id="market-time-structure"
         title={byLang('时间结构', 'Time structure')}
         description={byLang(
           '按小时和星期观察收益与成交量的历史分布；样本较少时只作为监测参考。',
@@ -1275,6 +1333,7 @@ export function MarketStructurePage() {
       </MarketSection>
 
       <MarketSection
+        id="market-cross-asset"
         title={byLang('跨资产结构', 'Cross-asset structure')}
         description={byLang(
           '滚动相关展示联动关系的变化过程，矩阵保留当前截面；相关性变化只是结构监测。',
@@ -1286,6 +1345,7 @@ export function MarketStructurePage() {
       </MarketSection>
 
       <MarketSection
+        id="market-runtime"
         title={byLang('运行状态与未配置数据源', 'Runtime and unconfigured feeds')}
         description={byLang(
           '检查采集器连接、爆仓流和暂未接入的数据源，区分正常空状态与数据源问题。',
@@ -1295,12 +1355,16 @@ export function MarketStructurePage() {
         <StreamObservability stream={data?.stream} />
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={12}>
-            <LiquidationPanel rows={liquidationRows} status={data?.liquidations.status} apiAggregate={data?.liquidations.aggregate} />
-          </Col>
-          <Col xs={24} lg={12}>
             <Card title={byLang('新闻 NLP / 情绪', 'News NLP / sentiment')}>
               <Typography.Text type="secondary">
                 {byLang('新闻情绪需要先配置新闻源或本地 NLP feed；当前未接入。', 'News sentiment needs a news source or local NLP feed; none is configured yet.')}
+              </Typography.Text>
+            </Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card title={byLang('链上数据', 'On-chain data')}>
+              <Typography.Text type="secondary">
+                {byLang('链上数据源尚未配置；接入前不会展示模拟数据。', 'On-chain sources are not configured; no simulated data is shown before integration.')}
               </Typography.Text>
             </Card>
           </Col>
