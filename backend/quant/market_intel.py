@@ -251,6 +251,33 @@ def _session_effect(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _session_heatmap(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    buckets: Dict[Tuple[int, int], Dict[str, float]] = {}
+    for row in rows:
+        try:
+            dt = datetime.fromtimestamp(int(row["time"]), tz=timezone.utc)
+        except Exception:
+            continue
+        key = (dt.weekday(), dt.hour)
+        b = buckets.setdefault(key, {"count": 0.0, "returnTotal": 0.0, "volumeTotal": 0.0})
+        b["count"] += 1.0
+        b["returnTotal"] += _to_float(row.get("returnPct"))
+        b["volumeTotal"] += _to_float(row.get("volume"))
+    out: List[Dict[str, Any]] = []
+    for (weekday, hour), b in sorted(buckets.items()):
+        count = max(1.0, b["count"])
+        out.append(
+            {
+                "weekdayUtc": weekday,
+                "hourUtc": hour,
+                "count": int(b["count"]),
+                "avgReturnPct": b["returnTotal"] / count,
+                "avgVolume": b["volumeTotal"] / count,
+            }
+        )
+    return out
+
+
 def _fetch_futures_derivatives(symbol: str, interval: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "fundingRate": None,
@@ -341,6 +368,98 @@ def _correlation_matrix(returns: Dict[str, List[float]]) -> List[Dict[str, Any]]
             values[right] = 1.0 if left == right else _corr(returns[left], returns[right])
         rows.append({"symbol": left, "values": values})
     return rows
+
+
+def _core_correlation_pairs(symbols: List[str]) -> List[Tuple[str, str]]:
+    available = set(symbols)
+    preferred = [("BTCUSDT", "ETHUSDT"), ("BTCUSDT", "SOLUSDT"), ("BTCUSDT", "BNBUSDT")]
+    pairs = [pair for pair in preferred if pair[0] in available and pair[1] in available]
+    if pairs:
+        return pairs
+    ordered = sorted(available)
+    return [(ordered[0], symbol) for symbol in ordered[1:4]] if len(ordered) >= 2 else []
+
+
+def _rolling_correlation_series(
+    klines_by_symbol: Dict[str, List[Dict[str, Any]]],
+    *,
+    window: int = 24,
+) -> List[Dict[str, Any]]:
+    symbols = sorted(symbol for symbol, rows in klines_by_symbol.items() if len(rows) >= max(8, window))
+    out: List[Dict[str, Any]] = []
+    for left, right in _core_correlation_pairs(symbols):
+        left_rows = klines_by_symbol.get(left, [])
+        right_rows = klines_by_symbol.get(right, [])
+        n = min(len(left_rows), len(right_rows))
+        if n < window:
+            continue
+        points: List[Dict[str, Any]] = []
+        for end in range(window, n + 1):
+            left_slice = left_rows[end - window:end]
+            right_slice = right_rows[end - window:end]
+            corr = _corr(
+                [_to_float(row.get("returnPct")) for row in left_slice],
+                [_to_float(row.get("returnPct")) for row in right_slice],
+            )
+            if corr is None:
+                continue
+            points.append(
+                {
+                    "ts": str(left_slice[-1].get("ts") or right_slice[-1].get("ts") or ""),
+                    "correlation": corr,
+                    "samples": window,
+                    "window": window,
+                }
+            )
+        if points:
+            out.append(
+                {
+                    "pair": f"{_ccxt_symbol(left, 'futures')}|{_ccxt_symbol(right, 'futures')}",
+                    "left": _ccxt_symbol(left, "futures"),
+                    "right": _ccxt_symbol(right, "futures"),
+                    "points": points[-48:],
+                    "window": window,
+                }
+            )
+    return out
+
+
+def _correlation_breaks(rolling: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    breaks: List[Dict[str, Any]] = []
+    for item in rolling:
+        points = item.get("points") if isinstance(item.get("points"), list) else []
+        values = [_to_float(point.get("correlation"), float("nan")) for point in points if isinstance(point, dict)]
+        values = [value for value in values if math.isfinite(value)]
+        if len(values) < 6:
+            continue
+        current = values[-1]
+        previous = values[:-1]
+        recent_mean = sum(previous[-12:]) / min(len(previous), 12)
+        prior_high = max(previous[-12:]) if previous else current
+        severity = ""
+        reason = ""
+        if prior_high >= 0.75 and current <= 0.45:
+            severity = "warning"
+            reason = "high_corr_break"
+        elif recent_mean - current >= 0.30:
+            severity = "notice"
+            reason = "mean_drop"
+        if not severity:
+            continue
+        breaks.append(
+            {
+                "pair": item.get("pair", ""),
+                "left": item.get("left", ""),
+                "right": item.get("right", ""),
+                "current": current,
+                "recentMean": recent_mean,
+                "priorHigh": prior_high,
+                "severity": severity,
+                "reason": reason,
+                "message": "Rolling correlation has weakened versus its recent baseline; treat this as a structure-change monitor, not a trading signal.",
+            }
+        )
+    return breaks[:8]
 
 
 def _stream_symbols(symbols: List[str], limit: int = MAX_STREAM_SYMBOLS) -> List[str]:
@@ -785,6 +904,7 @@ def build_market_intel_summary(
             "flow": None,
             "volumeRatio": 0.0,
             "sessionEffect": [],
+            "sessionHeatmap": [],
             "derivatives": None,
         }
         try:
@@ -793,6 +913,7 @@ def build_market_intel_summary(
             rows = _fetch_klines(venue, selected, interval, lookback_bars)
             venue_payload["volumeRatio"] = _volume_ratio(rows)
             venue_payload["sessionEffect"] = _session_effect(rows)
+            venue_payload["sessionHeatmap"] = _session_heatmap(rows)
             if venue == "futures":
                 venue_payload["derivatives"] = _fetch_futures_derivatives(selected, interval)
         except Exception as exc:
@@ -816,6 +937,9 @@ def build_market_intel_summary(
     stream_status = str(stream.get("status") or "stopped")
     now_ms = int(time.time() * 1000)
 
+    returns_for_corr = _returns_by_symbol(klines_for_corr)
+    rolling_corr = _rolling_correlation_series(klines_for_corr, window=24)
+
     return {
         "ts": _now_iso(),
         "source": "binance-public",
@@ -827,8 +951,10 @@ def build_market_intel_summary(
         "venues": venues,
         "correlation": {
             "venue": "futures",
-            "symbols": [_ccxt_symbol(symbol, "futures") for symbol in sorted(_returns_by_symbol(klines_for_corr).keys())],
-            "matrix": _correlation_matrix(_returns_by_symbol(klines_for_corr)),
+            "symbols": [_ccxt_symbol(symbol, "futures") for symbol in sorted(returns_for_corr.keys())],
+            "matrix": _correlation_matrix(returns_for_corr),
+            "rolling": rolling_corr,
+            "breaks": _correlation_breaks(rolling_corr),
         },
         "stream": stream,
         "liquidations": {

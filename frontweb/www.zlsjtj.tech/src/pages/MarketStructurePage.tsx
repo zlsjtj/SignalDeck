@@ -10,6 +10,9 @@ import type {
   MarketIntelLevel,
   MarketIntelLiquidation,
   MarketIntelLiquidationAggregate,
+  MarketIntelRollingCorrelation,
+  MarketIntelSessionHeatmapCell,
+  MarketIntelStreamStatus,
   MarketIntelVenue,
   MarketIntelVenueSnapshot,
 } from '@/types/api';
@@ -24,11 +27,18 @@ type MiniChartPoint = {
 };
 
 type PressureMetric = 'book' | 'flow' | 'ofi';
+type SessionTimezone = 'utc' | 'asia-shanghai';
 
 const PRESSURE_THRESHOLD = 0.15;
+const WEEKDAY_LABELS_ZH = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const WEEKDAY_LABELS_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function compactSymbol(symbol: string) {
   return symbol.replace('/USDT:USDT', '').replace('/USDT', '').replace('USDT', '');
+}
+
+function compactPair(left: string, right: string) {
+  return `${compactSymbol(left)}-${compactSymbol(right)}`;
 }
 
 function signedPercent(value?: number | null, digits = 2) {
@@ -91,6 +101,19 @@ function metricLabel(metric: PressureMetric) {
   if (metric === 'book') return byLang('订单薄', 'Book');
   if (metric === 'flow') return byLang('成交流', 'Flow');
   return byLang('实时 OFI', 'Live OFI');
+}
+
+function displayHour(hourUtc: number, timezone: SessionTimezone) {
+  return timezone === 'asia-shanghai' ? (hourUtc + 8) % 24 : hourUtc;
+}
+
+function displayWeekday(weekdayUtc: number, hourUtc: number, timezone: SessionTimezone) {
+  if (timezone === 'utc') return weekdayUtc;
+  return (weekdayUtc + Math.floor((hourUtc + 8) / 24)) % 7;
+}
+
+function timezoneLabel(timezone: SessionTimezone) {
+  return timezone === 'asia-shanghai' ? 'Asia/Shanghai' : 'UTC';
 }
 
 function MiniStreamChart({
@@ -448,7 +471,236 @@ function CorrelationHeatmap({ data }: { data?: Array<{ symbol: string; values: R
   );
 }
 
-function SessionEffectTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
+function RollingCorrelationPanel({
+  rows,
+  breaks,
+}: {
+  rows?: MarketIntelRollingCorrelation[];
+  breaks?: Array<{
+    pair: string;
+    left: string;
+    right: string;
+    current: number;
+    recentMean: number;
+    priorHigh: number;
+    severity: string;
+    reason: string;
+    message: string;
+  }>;
+}) {
+  const seriesRows = useMemo(() => rows ?? [], [rows]);
+  const option = useMemo(() => {
+    const timestamps = Array.from(new Set(seriesRows.flatMap((row) => row.points.map((point) => point.ts)))).sort();
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params];
+          const lines = items.map((item) => `${item.seriesName}: ${typeof item.data === 'number' ? item.data.toFixed(2) : '-'}`);
+          return `${formatTs(String(items[0]?.axisValue ?? ''))}<br/>${lines.join('<br/>')}`;
+        },
+      },
+      legend: { top: 0, textStyle: { color: 'rgba(215,226,240,0.72)' } },
+      grid: { left: 42, right: 16, top: 36, bottom: 28 },
+      xAxis: {
+        type: 'category',
+        data: timestamps,
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: string) => formatTs(v, 'MM-DD HH:mm') },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        min: -1,
+        max: 1,
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: number) => v.toFixed(1) },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      },
+      series: seriesRows.map((row) => {
+        const values = new Map(row.points.map((point) => [point.ts, point.correlation]));
+        return {
+          name: compactPair(row.left, row.right),
+          type: 'line',
+          smooth: true,
+          showSymbol: false,
+          data: timestamps.map((ts) => values.get(ts) ?? null),
+        };
+      }),
+    };
+  }, [seriesRows]);
+
+  return (
+    <Card title={byLang('滚动相关结构', 'Rolling correlation structure')}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Typography.Text type="secondary">
+          {byLang(
+            '滚动相关用于监测跨资产联动结构变化，不构成交易建议。',
+            'Rolling correlation monitors cross-asset structure changes and is not trading advice.',
+          )}
+        </Typography.Text>
+        {(breaks ?? []).length > 0 ? (
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            {(breaks ?? []).map((item) => (
+              <Alert
+                key={`${item.pair}-${item.reason}`}
+                type={item.severity === 'warning' ? 'warning' : 'info'}
+                showIcon
+                message={`${compactPair(item.left, item.right)} ${byLang('相关性变化提示', 'correlation change monitor')}`}
+                description={byLang(
+                  `当前 ${item.current.toFixed(2)}，近期均值 ${item.recentMean.toFixed(2)}，前期高点 ${item.priorHigh.toFixed(2)}。这只是结构变化监测，不是交易信号。`,
+                  `Current ${item.current.toFixed(2)}, recent mean ${item.recentMean.toFixed(2)}, prior high ${item.priorHigh.toFixed(2)}. This is a structure-change monitor, not a trading signal.`,
+                )}
+              />
+            ))}
+          </Space>
+        ) : null}
+        {seriesRows.length === 0 ? (
+          <Empty description={byLang('暂无足够 K 线生成滚动相关', 'Not enough kline data for rolling correlation')} />
+        ) : (
+          <ReactECharts option={option} style={{ height: 260 }} notMerge lazyUpdate />
+        )}
+      </Space>
+    </Card>
+  );
+}
+
+function SessionHeatmap({
+  rows,
+  timezone,
+}: {
+  rows?: MarketIntelSessionHeatmapCell[];
+  timezone: SessionTimezone;
+}) {
+  const cells = useMemo(() => rows ?? [], [rows]);
+  const weekdayLabels = WEEKDAY_LABELS_ZH.map((label, idx) => byLang(label, WEEKDAY_LABELS_EN[idx]));
+  const option = useMemo(() => {
+    const keyed = cells.map((cell) => ({
+      ...cell,
+      hour: displayHour(cell.hourUtc, timezone),
+      weekday: displayWeekday(cell.weekdayUtc, cell.hourUtc, timezone),
+    }));
+    const maxAbs = Math.max(0.001, ...keyed.map((cell) => Math.abs(cell.avgReturnPct)));
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        formatter: (params: any) => {
+          const cell = keyed[params.dataIndex];
+          if (!cell) return '';
+          return [
+            `${weekdayLabels[cell.weekday]} ${String(cell.hour).padStart(2, '0')}:00 ${timezoneLabel(timezone)}`,
+            `${byLang('均值收益', 'Avg return')}: ${signedPercent(cell.avgReturnPct, 3)}`,
+            `${byLang('均量', 'Avg volume')}: ${formatNumber(cell.avgVolume, 2)}`,
+            `${byLang('样本', 'Bars')}: ${cell.count}`,
+          ].join('<br/>');
+        },
+      },
+      grid: { left: 46, right: 16, top: 12, bottom: 38 },
+      xAxis: {
+        type: 'category',
+        data: Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, '0')}:00`),
+        axisLabel: { color: 'rgba(215,226,240,0.72)' },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'category',
+        data: weekdayLabels,
+        axisLabel: { color: 'rgba(215,226,240,0.72)' },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+        axisTick: { show: false },
+      },
+      visualMap: {
+        min: -maxAbs,
+        max: maxAbs,
+        show: false,
+        inRange: { color: ['#1677ff', '#2f3b45', '#ff4d4f'] },
+      },
+      series: [
+        {
+          type: 'heatmap',
+          data: keyed.map((cell) => [cell.hour, cell.weekday, cell.avgReturnPct]),
+          label: { show: false },
+          emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 1 } },
+        },
+      ],
+    };
+  }, [cells, timezone, weekdayLabels]);
+
+  return (
+    <Card title={byLang('weekday + hour 热力图', 'Weekday + hour heatmap')}>
+      {cells.length < 12 ? (
+        <Empty description={byLang('样本不足，暂不展示时间段热力图', 'Not enough samples for the session heatmap yet')} />
+      ) : (
+        <ReactECharts option={option} style={{ height: 260 }} notMerge lazyUpdate />
+      )}
+    </Card>
+  );
+}
+
+function StreamObservability({ stream }: { stream?: MarketIntelStreamStatus }) {
+  const connectionRows = Object.entries(stream?.connections ?? {}).map(([venue, conn]) => ({
+    key: venue,
+    venue,
+    ...conn,
+  }));
+  const errorRows = (stream?.errors ?? []).slice(0, 6).map((row, idx) => ({ ...row, key: `${row.ts}-${idx}` }));
+
+  return (
+    <Card title={byLang('采集器状态', 'Collector status')}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Row gutter={[12, 12]}>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时流', 'Stream')} value={stream?.status ?? 'stopped'} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('订阅流数量', 'Subscribed streams')} value={connectionRows.reduce((sum, row) => sum + (row.streams ?? 0), 0)} />
+          </Col>
+          <Col xs={24} md={6}>
+            <Statistic title={byLang('启动时间', 'Started')} value={stream?.startedAt ? formatTs(stream.startedAt) : '-'} />
+          </Col>
+          <Col xs={24} md={6}>
+            <Statistic title={byLang('最近更新', 'Updated')} value={stream?.updatedAt ? formatTs(stream.updatedAt) : '-'} />
+          </Col>
+        </Row>
+        <Table
+          size="small"
+          pagination={false}
+          dataSource={connectionRows}
+          columns={[
+            { title: byLang('市场', 'Venue'), dataIndex: 'venue', render: (v: string) => v === 'spot' ? 'Spot' : 'Futures' },
+            {
+              title: byLang('连接状态', 'Connection'),
+              dataIndex: 'status',
+              render: (v: string) => <Tag color={v === 'open' ? 'green' : v === 'error' ? 'red' : 'default'}>{v}</Tag>,
+            },
+            { title: byLang('流数量', 'Streams'), dataIndex: 'streams' },
+            { title: byLang('更新时间', 'Updated'), dataIndex: 'updatedAt', render: (v: string) => v ? formatTs(v) : '-' },
+            { title: byLang('错误', 'Error'), dataIndex: 'error', render: (v: string) => v || '-' },
+          ]}
+        />
+        {errorRows.length > 0 ? (
+          <Table
+            size="small"
+            pagination={false}
+            dataSource={errorRows}
+            columns={[
+              { title: byLang('时间', 'Time'), dataIndex: 'ts', render: (v: string) => formatTs(v) },
+              { title: byLang('市场', 'Venue'), dataIndex: 'venue', render: (v: string) => v || '-' },
+              { title: byLang('最近错误', 'Recent error'), dataIndex: 'message' },
+            ]}
+          />
+        ) : (
+          <Typography.Text type="secondary">
+            {byLang('暂无采集器错误。', 'No collector errors.')}
+          </Typography.Text>
+        )}
+      </Space>
+    </Card>
+  );
+}
+
+function SessionEffectTable({ venue, timezone }: { venue?: MarketIntelVenueSnapshot; timezone: SessionTimezone }) {
   const rows = venue?.sessionEffect;
   const topRows = [...(rows ?? [])]
     .sort((a, b) => Math.abs(b.avgReturnPct) - Math.abs(a.avgReturnPct))
@@ -460,6 +712,7 @@ function SessionEffectTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
         <Space wrap>
           <Typography.Text>{byLang('主视角时间段效应', 'Primary session effect')}</Typography.Text>
           {venue ? <Tag>{venue.venue === 'spot' ? 'Spot' : 'Futures'}</Tag> : null}
+          <Tag>{timezoneLabel(timezone)}</Tag>
         </Space>
       }
     >
@@ -471,7 +724,7 @@ function SessionEffectTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
           pagination={false}
           dataSource={topRows.map((row) => ({ ...row, key: row.hourUtc }))}
           columns={[
-            { title: byLang('UTC 小时', 'UTC hour'), dataIndex: 'hourUtc', render: (v: number) => `${String(v).padStart(2, '0')}:00` },
+            { title: byLang('小时', 'Hour'), dataIndex: 'hourUtc', render: (v: number) => `${String(displayHour(v, timezone)).padStart(2, '0')}:00` },
             { title: byLang('均值收益', 'Avg return'), dataIndex: 'avgReturnPct', render: (v: number) => signedPercent(v, 3) },
             { title: byLang('均量', 'Avg volume'), dataIndex: 'avgVolume', render: (v: number) => formatNumber(v, 2) },
             { title: byLang('样本', 'Bars'), dataIndex: 'count' },
@@ -604,6 +857,7 @@ export function MarketStructurePage() {
   const [symbol, setSymbol] = useState<string | undefined>(undefined);
   const [primaryVenue, setPrimaryVenue] = useState<MarketIntelVenue>('futures');
   const [streamWindowSeconds, setStreamWindowSeconds] = useState<StreamWindowSeconds>(300);
+  const [sessionTimezone, setSessionTimezone] = useState<SessionTimezone>('utc');
   const query = useMarketIntelSummaryQuery(symbol, streamWindowSeconds);
   const data = query.data;
   const selectedVenue = data?.venues[primaryVenue];
@@ -709,11 +963,27 @@ export function MarketStructurePage() {
           <OrderbookTable venue={selectedVenue} />
         </Col>
         <Col xs={24} xl={12}>
-          <SessionEffectTable venue={selectedVenue} />
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Segmented
+              value={sessionTimezone}
+              options={[
+                { value: 'utc', label: 'UTC' },
+                { value: 'asia-shanghai', label: 'Asia-Shanghai' },
+              ]}
+              onChange={(value) => setSessionTimezone(value as SessionTimezone)}
+            />
+            <SessionEffectTable venue={selectedVenue} timezone={sessionTimezone} />
+          </Space>
         </Col>
       </Row>
 
+      <SessionHeatmap rows={selectedVenue?.sessionHeatmap} timezone={sessionTimezone} />
+
+      <RollingCorrelationPanel rows={data?.correlation.rolling} breaks={data?.correlation.breaks} />
+
       <CorrelationHeatmap data={data?.correlation.matrix} />
+
+      <StreamObservability stream={data?.stream} />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>

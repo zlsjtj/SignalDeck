@@ -329,6 +329,14 @@ export type MarketIntelSessionEffect = {
   avgVolume: number;
 };
 
+export type MarketIntelSessionHeatmapCell = {
+  weekdayUtc: number;
+  hourUtc: number;
+  count: number;
+  avgReturnPct: number;
+  avgVolume: number;
+};
+
 export type MarketIntelVenueSnapshot = {
   venue: MarketIntelVenue;
   symbol: string;
@@ -339,14 +347,44 @@ export type MarketIntelVenueSnapshot = {
   flow: MarketIntelFlow | null;
   volumeRatio: number;
   sessionEffect: MarketIntelSessionEffect[];
+  sessionHeatmap?: MarketIntelSessionHeatmapCell[];
   derivatives: MarketIntelDerivatives | null;
   stream?: MarketIntelVenueStream;
+};
+
+export type MarketIntelRollingCorrelationPoint = {
+  ts: string;
+  correlation: number;
+  samples: number;
+  window: number;
+};
+
+export type MarketIntelRollingCorrelation = {
+  pair: string;
+  left: string;
+  right: string;
+  points: MarketIntelRollingCorrelationPoint[];
+  window: number;
+};
+
+export type MarketIntelCorrelationBreak = {
+  pair: string;
+  left: string;
+  right: string;
+  current: number;
+  recentMean: number;
+  priorHigh: number;
+  severity: string;
+  reason: string;
+  message: string;
 };
 
 export type MarketIntelCorrelation = {
   venue: MarketIntelVenue;
   symbols: string[];
   matrix: Array<{ symbol: string; values: Record<string, number | null> }>;
+  rolling?: MarketIntelRollingCorrelation[];
+  breaks?: MarketIntelCorrelationBreak[];
 };
 
 export type MarketIntelFeedStatus = {
