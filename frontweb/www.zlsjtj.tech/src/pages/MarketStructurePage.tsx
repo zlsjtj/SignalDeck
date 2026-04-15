@@ -10,7 +10,6 @@ import type {
   MarketIntelLevel,
   MarketIntelLiquidation,
   MarketIntelLiquidationAggregate,
-  MarketIntelSessionEffect,
   MarketIntelVenue,
   MarketIntelVenueSnapshot,
 } from '@/types/api';
@@ -24,6 +23,10 @@ type MiniChartPoint = {
   samples: number;
 };
 
+type PressureMetric = 'book' | 'flow' | 'ofi';
+
+const PRESSURE_THRESHOLD = 0.15;
+
 function compactSymbol(symbol: string) {
   return symbol.replace('/USDT:USDT', '').replace('/USDT', '').replace('USDT', '');
 }
@@ -35,29 +38,59 @@ function signedPercent(value?: number | null, digits = 2) {
 }
 
 function barColor(value: number) {
-  if (value >= 0.15) return '#ff4d4f';
-  if (value <= -0.15) return '#1677ff';
+  if (value >= PRESSURE_THRESHOLD) return '#ff4d4f';
+  if (value <= -PRESSURE_THRESHOLD) return '#1677ff';
   return '#52c41a';
 }
 
 function pressureText(value?: number | null) {
   const v = value ?? 0;
-  if (v >= 0.15) return byLang('买方偏强', 'Buy pressure');
-  if (v <= -0.15) return byLang('卖方偏强', 'Sell pressure');
+  if (v >= PRESSURE_THRESHOLD) return byLang('买方偏强', 'Buy pressure');
+  if (v <= -PRESSURE_THRESHOLD) return byLang('卖方偏强', 'Sell pressure');
   return byLang('相对均衡', 'Balanced');
 }
 
 function pressureTagColor(value?: number | null) {
   const v = value ?? 0;
-  if (v >= 0.15) return 'red';
-  if (v <= -0.15) return 'blue';
+  if (v >= PRESSURE_THRESHOLD) return 'red';
+  if (v <= -PRESSURE_THRESHOLD) return 'blue';
   return 'green';
 }
 
-function coverageText(seconds?: number) {
+function coverageText(seconds?: number, targetSeconds?: number) {
   if (!seconds || seconds <= 0) return byLang('等待实时样本', 'Waiting for live samples');
-  if (seconds < 60) return byLang(`约 ${seconds} 秒样本`, `About ${seconds}s covered`);
-  return byLang(`约 ${Math.round(seconds / 60)} 分钟样本`, `About ${Math.round(seconds / 60)}m covered`);
+  const text = seconds < 60
+    ? byLang(`约 ${seconds} 秒样本`, `About ${seconds}s covered`)
+    : byLang(`约 ${Math.round(seconds / 60)} 分钟样本`, `About ${Math.round(seconds / 60)}m covered`);
+  if (targetSeconds && seconds < Math.min(targetSeconds, 120)) {
+    return byLang(`${text}，样本仍在积累`, `${text}; samples are still accumulating`);
+  }
+  return text;
+}
+
+function metricExplanation(metric: PressureMetric) {
+  if (metric === 'book') {
+    return byLang(
+      'Book skew 比较当前 Level 2 买卖盘名义额，正值表示买盘更厚，负值表示卖盘更厚。',
+      'Book skew compares Level 2 bid and ask notional; positive means thicker bids, negative means thicker asks.',
+    );
+  }
+  if (metric === 'flow') {
+    return byLang(
+      'Flow skew 比较近期主动买入和主动卖出名义额，正值表示主动买入占优。',
+      'Flow skew compares recent taker-buy and taker-sell notional; positive means taker buying dominates.',
+    );
+  }
+  return byLang(
+    'OFI 衡量订单薄更新带来的短窗订单流压力，正值偏买方，负值偏卖方。',
+    'OFI measures short-window order-flow pressure from book updates; positive leans buy-side and negative leans sell-side.',
+  );
+}
+
+function metricLabel(metric: PressureMetric) {
+  if (metric === 'book') return byLang('订单薄', 'Book');
+  if (metric === 'flow') return byLang('成交流', 'Flow');
+  return byLang('实时 OFI', 'Live OFI');
 }
 
 function MiniStreamChart({
@@ -65,6 +98,7 @@ function MiniStreamChart({
   data,
   color,
   baseline,
+  emptyText,
   min,
   max,
 }: {
@@ -72,6 +106,7 @@ function MiniStreamChart({
   data: MiniChartPoint[];
   color: string;
   baseline: number;
+  emptyText: string;
   min?: number;
   max?: number;
 }) {
@@ -85,7 +120,9 @@ function MiniStreamChart({
         formatter: (params: any) => {
           const point = Array.isArray(params) ? params[0] : params;
           const value = typeof point?.data === 'number' ? formatPercent(point.data) : '-';
-          return `${formatTs(String(point?.axisValue ?? ''))}<br/>${title}: ${value}`;
+          const source = data.find((item) => item.ts === point?.axisValue);
+          const samples = source?.samples ?? 0;
+          return `${formatTs(String(point?.axisValue ?? ''))}<br/>${title}: ${value}<br/>${byLang('样本', 'Samples')}: ${samples}`;
         },
       },
       grid: { left: 42, right: 12, top: 10, bottom: 28 },
@@ -132,7 +169,7 @@ function MiniStreamChart({
     <div style={{ minHeight: 172 }}>
       <Typography.Text strong>{title}</Typography.Text>
       {data.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={byLang('暂无实时序列', 'No live series yet')} />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />
       ) : (
         <ReactECharts option={option} style={{ height: 146 }} notMerge lazyUpdate />
       )}
@@ -140,7 +177,51 @@ function MiniStreamChart({
   );
 }
 
-function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
+function PressureSummary({
+  values,
+  streamWindowSeconds,
+}: {
+  values: Record<PressureMetric, number | undefined | null>;
+  streamWindowSeconds: StreamWindowSeconds;
+}) {
+  return (
+    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+      <Typography.Text type="secondary">
+        {byLang(
+          '颜色阈值：高于 +15% 标记为买方压力偏强，低于 -15% 标记为卖方压力偏强；中间区间仅表示短窗内相对均衡。',
+          'Color thresholds: above +15% marks stronger buy-side pressure, below -15% marks stronger sell-side pressure; the middle band only means the short window is relatively balanced.',
+        )}
+      </Typography.Text>
+      <Space wrap>
+        {(['book', 'flow', 'ofi'] as PressureMetric[]).map((metric) => (
+          <Tag key={metric} color={pressureTagColor(values[metric])}>
+            {metricLabel(metric)}: {pressureText(values[metric])}
+          </Tag>
+        ))}
+        <Typography.Text type="secondary">
+          {byLang('窗口', 'Window')}: {streamWindowSeconds / 60}m
+        </Typography.Text>
+      </Space>
+      <Space direction="vertical" size={2}>
+        {(['book', 'flow', 'ofi'] as PressureMetric[]).map((metric) => (
+          <Typography.Text key={metric} type="secondary">
+            {metricLabel(metric)}: {metricExplanation(metric)}
+          </Typography.Text>
+        ))}
+      </Space>
+    </Space>
+  );
+}
+
+function VenueCard({
+  venue,
+  isPrimary,
+  streamWindowSeconds,
+}: {
+  venue?: MarketIntelVenueSnapshot;
+  isPrimary: boolean;
+  streamWindowSeconds: StreamWindowSeconds;
+}) {
   if (!venue) return null;
   const ob = venue.orderbook;
   const flow = venue.flow;
@@ -156,14 +237,18 @@ function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
     value: point.takerBuyRatio,
     samples: point.samples,
   }));
+  const coverageSeconds = Math.max(stream?.ofi?.availableSeconds ?? 0, stream?.flow?.availableSeconds ?? 0);
   return (
     <Card
+      style={isPrimary ? { borderColor: '#ff4d4f' } : undefined}
       title={
         <Space wrap>
           <Typography.Text strong>{venue.venue === 'spot' ? byLang('现货', 'Spot') : byLang('合约', 'Futures')}</Typography.Text>
           <Tag>{compactSymbol(venue.symbol)}</Tag>
+          {isPrimary ? <Tag color="red">{byLang('主视角', 'Primary view')}</Tag> : <Tag>{byLang('辅助视角', 'Secondary view')}</Tag>}
         </Space>
       }
+      extra={<Typography.Text type="secondary">{coverageText(coverageSeconds, streamWindowSeconds)}</Typography.Text>}
     >
       {!venue.ok ? (
         <Alert type="warning" showIcon message={venue.error || byLang('数据源暂不可用', 'Source unavailable')} />
@@ -216,20 +301,14 @@ function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
           showInfo={false}
           strokeColor={barColor(ob?.imbalance ?? 0)}
         />
-        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-          <Typography.Text type="secondary">
-            {byLang(
-              '阈值说明：高于 +15% 表示买方压力偏强，低于 -15% 表示卖方压力偏强，中间区间仅表示短窗内相对均衡。',
-              'Thresholds: above +15% indicates stronger buy-side pressure, below -15% indicates stronger sell-side pressure, and the middle band only means the short window is relatively balanced.',
-            )}
-          </Typography.Text>
-          <Space wrap>
-            <Tag color={pressureTagColor(ob?.imbalance)}>{byLang('订单薄', 'Book')}: {pressureText(ob?.imbalance)}</Tag>
-            <Tag color={pressureTagColor(flow?.tradeImbalance)}>{byLang('成交流', 'Flow')}: {pressureText(flow?.tradeImbalance)}</Tag>
-            <Tag color={pressureTagColor(stream?.ofi?.ofiNorm)}>{byLang('实时 OFI', 'Live OFI')}: {pressureText(stream?.ofi?.ofiNorm)}</Tag>
-            <Typography.Text type="secondary">{coverageText(Math.max(stream?.ofi?.availableSeconds ?? 0, stream?.flow?.availableSeconds ?? 0))}</Typography.Text>
-          </Space>
-        </Space>
+        <PressureSummary
+          values={{
+            book: ob?.imbalance,
+            flow: flow?.tradeImbalance,
+            ofi: stream?.ofi?.ofiNorm,
+          }}
+          streamWindowSeconds={streamWindowSeconds}
+        />
       </div>
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24} md={12}>
@@ -238,6 +317,10 @@ function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             data={ofiSeries}
             color={barColor(stream?.ofi?.ofiNorm ?? 0)}
             baseline={0}
+            emptyText={byLang(
+              '等待订单薄实时更新样本；刚启动或断线重连后短时间为空是正常状态。',
+              'Waiting for live book-update samples; an empty chart is normal right after startup or reconnect.',
+            )}
           />
         </Col>
         <Col xs={24} md={12}>
@@ -248,6 +331,10 @@ function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             baseline={0.5}
             min={0}
             max={1}
+            emptyText={byLang(
+              '等待实时成交样本；无样本表示当前窗口还没有可聚合的主动成交流。',
+              'Waiting for live trade samples; no samples means the current window has no taker-flow aggregation yet.',
+            )}
           />
         </Col>
       </Row>
@@ -302,9 +389,16 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   ];
 
   return (
-    <Card title={byLang('Level 2 订单薄', 'Level 2 order book')}>
+    <Card
+      title={
+        <Space wrap>
+          <Typography.Text>{byLang('主视角 Level 2 订单薄', 'Primary Level 2 order book')}</Typography.Text>
+          {venue ? <Tag>{venue.venue === 'spot' ? 'Spot' : 'Futures'}</Tag> : null}
+        </Space>
+      }
+    >
       {rows.length === 0 ? (
-        <Empty description={byLang('暂无订单薄快照', 'No book snapshot')} />
+        <Empty description={byLang('主视角暂无订单薄快照', 'No primary-view book snapshot')} />
       ) : (
         <Table size="small" pagination={false} columns={columns} dataSource={rows} />
       )}
@@ -354,15 +448,23 @@ function CorrelationHeatmap({ data }: { data?: Array<{ symbol: string; values: R
   );
 }
 
-function SessionEffectTable({ rows }: { rows?: MarketIntelSessionEffect[] }) {
+function SessionEffectTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
+  const rows = venue?.sessionEffect;
   const topRows = [...(rows ?? [])]
     .sort((a, b) => Math.abs(b.avgReturnPct) - Math.abs(a.avgReturnPct))
     .slice(0, 8)
     .sort((a, b) => a.hourUtc - b.hourUtc);
   return (
-    <Card title={byLang('时间段效应', 'Session effect')}>
+    <Card
+      title={
+        <Space wrap>
+          <Typography.Text>{byLang('主视角时间段效应', 'Primary session effect')}</Typography.Text>
+          {venue ? <Tag>{venue.venue === 'spot' ? 'Spot' : 'Futures'}</Tag> : null}
+        </Space>
+      }
+    >
       {topRows.length === 0 ? (
-        <Empty description={byLang('暂无分时统计', 'No session stats')} />
+        <Empty description={byLang('主视角暂无分时统计', 'No primary-view session stats')} />
       ) : (
         <Table
           size="small"
@@ -505,6 +607,8 @@ export function MarketStructurePage() {
   const query = useMarketIntelSummaryQuery(symbol, streamWindowSeconds);
   const data = query.data;
   const selectedVenue = data?.venues[primaryVenue];
+  const secondaryVenueKey: MarketIntelVenue = primaryVenue === 'futures' ? 'spot' : 'futures';
+  const secondaryVenue = data?.venues[secondaryVenueKey];
   const liquidationRows = (data?.liquidations.rows ?? []) as MarketIntelLiquidation[];
 
   useEffect(() => {
@@ -577,6 +681,7 @@ export function MarketStructurePage() {
       <Card size="small" loading={query.isPending}>
         <Space wrap>
           <Tag>{data?.source ?? 'binance-public'}</Tag>
+          <Tag color="red">{byLang('主视角', 'Primary view')}: {primaryVenue === 'spot' ? 'Spot' : 'Futures'}</Tag>
           <Typography.Text type="secondary">{byLang('更新时间', 'Updated')}: {formatTs(data?.ts)}</Typography.Text>
           <Typography.Text type="secondary">{byLang('周期', 'Interval')}: {data?.interval ?? '15m'}</Typography.Text>
           <Typography.Text type="secondary">{byLang('实时窗口', 'Live window')}: {streamWindowOptions.find((item) => item.value === (data?.stream?.windowSeconds ?? streamWindowSeconds))?.label}</Typography.Text>
@@ -591,11 +696,11 @@ export function MarketStructurePage() {
       </Card>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} xl={12}>
-          <VenueCard venue={data?.venues.spot} />
+        <Col xs={24} xl={14}>
+          <VenueCard venue={selectedVenue} isPrimary streamWindowSeconds={streamWindowSeconds} />
         </Col>
-        <Col xs={24} xl={12}>
-          <VenueCard venue={data?.venues.futures} />
+        <Col xs={24} xl={10}>
+          <VenueCard venue={secondaryVenue} isPrimary={false} streamWindowSeconds={streamWindowSeconds} />
         </Col>
       </Row>
 
@@ -604,7 +709,7 @@ export function MarketStructurePage() {
           <OrderbookTable venue={selectedVenue} />
         </Col>
         <Col xs={24} xl={12}>
-          <SessionEffectTable rows={selectedVenue?.sessionEffect} />
+          <SessionEffectTable venue={selectedVenue} />
         </Col>
       </Row>
 
