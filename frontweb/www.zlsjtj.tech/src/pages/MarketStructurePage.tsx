@@ -82,25 +82,6 @@ function coverageText(seconds?: number, targetSeconds?: number) {
   return text;
 }
 
-function metricExplanation(metric: PressureMetric) {
-  if (metric === 'book') {
-    return byLang(
-      'Book skew 比较当前 Level 2 买卖盘名义额，正值表示买盘更厚，负值表示卖盘更厚。',
-      'Book skew compares Level 2 bid and ask notional; positive means thicker bids, negative means thicker asks.',
-    );
-  }
-  if (metric === 'flow') {
-    return byLang(
-      'Flow skew 比较近期主动买入和主动卖出名义额，正值表示主动买入占优。',
-      'Flow skew compares recent taker-buy and taker-sell notional; positive means taker buying dominates.',
-    );
-  }
-  return byLang(
-    'OFI 衡量订单薄更新带来的短窗订单流压力，正值偏买方，负值偏卖方。',
-    'OFI measures short-window order-flow pressure from book updates; positive leans buy-side and negative leans sell-side.',
-  );
-}
-
 function metricLabel(metric: PressureMetric) {
   if (metric === 'book') return byLang('订单薄', 'Book');
   if (metric === 'flow') return byLang('成交流', 'Flow');
@@ -367,13 +348,12 @@ function PressureSummary({
           {byLang('窗口', 'Window')}: {streamWindowSeconds / 60}m
         </Typography.Text>
       </Space>
-      <Space direction="vertical" size={2}>
-        {(['book', 'flow', 'ofi'] as PressureMetric[]).map((metric) => (
-          <Typography.Text key={metric} type="secondary">
-            {metricLabel(metric)}: {metricExplanation(metric)}
-          </Typography.Text>
-        ))}
-      </Space>
+      <Typography.Text type="secondary">
+        {byLang(
+          'Book 看挂单厚度，Flow 看主动成交，OFI 看订单薄更新压力；颜色只标记短窗压力方向。',
+          'Book tracks displayed depth, Flow tracks taker trades, and OFI tracks book-update pressure; colors only mark the short-window pressure direction.',
+        )}
+      </Typography.Text>
     </Space>
   );
 }
@@ -530,25 +510,37 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
 
   const columns: ColumnsType<{ key: number; bid?: MarketIntelLevel; ask?: MarketIntelLevel }> = [
     {
-      title: byLang('买盘', 'Bid'),
+      title: byLang('买价', 'Bid price'),
       dataIndex: 'bid',
-      render: (level?: MarketIntelLevel) => level ? `${formatNumber(level.price, 2)} / ${formatNumber(level.qty, 4)}` : '-',
+      render: (level?: MarketIntelLevel) => level ? formatNumber(level.price, 2) : '-',
+    },
+    {
+      title: byLang('买量', 'Bid qty'),
+      dataIndex: 'bid',
+      responsive: ['md'],
+      render: (level?: MarketIntelLevel) => level ? formatNumber(level.qty, 4) : '-',
     },
     {
       title: byLang('买盘名义额', 'Bid notional'),
       dataIndex: 'bid',
-      responsive: ['md'],
+      responsive: ['lg'],
       render: (level?: MarketIntelLevel) => level ? formatNumber(level.notional, 0) : '-',
     },
     {
-      title: byLang('卖盘', 'Ask'),
+      title: byLang('卖价', 'Ask price'),
       dataIndex: 'ask',
-      render: (level?: MarketIntelLevel) => level ? `${formatNumber(level.price, 2)} / ${formatNumber(level.qty, 4)}` : '-',
+      render: (level?: MarketIntelLevel) => level ? formatNumber(level.price, 2) : '-',
+    },
+    {
+      title: byLang('卖量', 'Ask qty'),
+      dataIndex: 'ask',
+      responsive: ['md'],
+      render: (level?: MarketIntelLevel) => level ? formatNumber(level.qty, 4) : '-',
     },
     {
       title: byLang('卖盘名义额', 'Ask notional'),
       dataIndex: 'ask',
-      responsive: ['md'],
+      responsive: ['lg'],
       render: (level?: MarketIntelLevel) => level ? formatNumber(level.notional, 0) : '-',
     },
   ];
@@ -667,6 +659,11 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const [period, setPeriod] = useState<OiPeriod>('15m');
   const selected = windows.find((item) => item.period === period) ?? windows[0];
   const points = useMemo(() => selected?.points ?? [], [selected]);
+  const latestPoint = points.at(-1);
+  const latestOpenInterest = selected?.latest ?? latestPoint?.openInterest ?? null;
+  const latestChange = selected?.changePct ?? latestPoint?.changePct ?? null;
+  const latestOpenInterestValue = latestPoint?.openInterestValue ?? null;
+  const fundingRate = venue?.derivatives?.fundingRate;
   const option = useMemo(() => {
     return {
       backgroundColor: 'transparent',
@@ -739,6 +736,36 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
           <Empty description={byLang('暂无持仓量历史数据', 'No open interest history yet')} />
         ) : (
           <>
+            <Row gutter={[12, 12]}>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('当前周期', 'Period')} value={selected?.period ?? period} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('最新持仓量', 'Latest OI')} value={latestOpenInterest == null ? '-' : formatNumber(latestOpenInterest, 2)} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic
+                  title={byLang('最近变化', 'Latest change')}
+                  value={latestChange == null ? '-' : signedPercent(latestChange, 3)}
+                  valueStyle={{ color: latestChange == null ? undefined : barColor(latestChange) }}
+                />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('样本数', 'Samples')} value={points.length} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('最新名义价值', 'Latest notional')} value={latestOpenInterestValue == null ? '-' : formatNumber(latestOpenInterestValue, 0)} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('资金费率', 'Funding')} value={fundingRate == null ? '-' : formatPercent(fundingRate, 4)} />
+              </Col>
+            </Row>
+            <Typography.Text type="secondary">
+              {byLang(
+                'OI 上升或下降只表示合约持仓规模变化，不能直接说明多空方向。',
+                'OI rising or falling only shows positioning size changes; it does not directly identify long or short direction.',
+              )}
+            </Typography.Text>
             <ReactECharts option={option} style={{ height: 260 }} notMerge lazyUpdate />
             <Table
               size="small"
@@ -1129,6 +1156,8 @@ function LiquidationPanel({
               { title: byLang('时间', 'Time'), dataIndex: 'ts', render: (v: string) => formatTs(v) },
               { title: byLang('标的', 'Symbol'), dataIndex: 'symbol' },
               { title: byLang('方向', 'Side'), dataIndex: 'side', render: (v: string) => liquidationSideText(v) },
+              { title: byLang('价格', 'Price'), dataIndex: 'price', responsive: ['md'], render: (v: number) => formatNumber(v, 2) },
+              { title: byLang('数量', 'Qty'), dataIndex: 'qty', responsive: ['lg'], render: (v: number) => formatNumber(v, 4) },
               { title: byLang('名义额', 'Notional'), dataIndex: 'notional', render: (v: number) => formatNumber(v, 0) },
             ]}
           />
