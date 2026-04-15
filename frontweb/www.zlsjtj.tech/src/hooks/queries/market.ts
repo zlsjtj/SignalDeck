@@ -32,10 +32,10 @@ export function useMarketKlinesQuery(symbol: string, enabled = true) {
   });
 }
 
-export function useMarketIntelSummaryQuery(symbol?: string, enabled = true) {
+export function useMarketIntelSummaryQuery(symbol?: string, streamWindowSeconds = 300, enabled = true) {
   return useQuery({
-    queryKey: queryKeys.marketIntelSummary(symbol),
-    queryFn: () => api.getMarketIntelSummary(symbol),
+    queryKey: queryKeys.marketIntelSummary(symbol, streamWindowSeconds),
+    queryFn: () => api.getMarketIntelSummary(symbol, streamWindowSeconds),
     enabled: enabled && !env.useMock,
     refetchInterval: 60_000,
     refetchIntervalInBackground: true,

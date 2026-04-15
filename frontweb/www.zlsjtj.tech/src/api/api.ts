@@ -435,8 +435,8 @@ export const api = {
       .slice(-96);
   },
 
-  async getMarketIntelSummary(symbol?: string): Promise<MarketIntelSummary> {
-    if (useQuantApi) return quantApi.getMarketIntelSummary(symbol);
+  async getMarketIntelSummary(symbol?: string, streamWindowSeconds = 300): Promise<MarketIntelSummary> {
+    if (useQuantApi) return quantApi.getMarketIntelSummary(symbol, streamWindowSeconds);
     const { data } = await http.get<MarketIntelSummary>('/market/intel/summary', {
       params: {
         symbol,
@@ -444,6 +444,7 @@ export const api = {
         interval: '15m',
         lookback_bars: 96,
         depth_limit: 20,
+        stream_window_seconds: streamWindowSeconds,
       },
     });
     return data;

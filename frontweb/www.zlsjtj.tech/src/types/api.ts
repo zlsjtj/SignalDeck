@@ -289,6 +289,13 @@ export type MarketIntelOfiSummary = {
   ofi: number;
   ofiNorm: number;
   latestTs: string;
+  availableSeconds?: number;
+  series?: Array<{
+    ts: string;
+    ofi: number;
+    ofiNorm: number;
+    samples: number;
+  }>;
 };
 
 export type MarketIntelStreamFlow = {
@@ -298,6 +305,15 @@ export type MarketIntelStreamFlow = {
   takerBuyRatio: number;
   imbalance: number;
   latestTs: string;
+  availableSeconds?: number;
+  series?: Array<{
+    ts: string;
+    buyNotional: number;
+    sellNotional: number;
+    takerBuyRatio: number;
+    imbalance: number;
+    samples: number;
+  }>;
 };
 
 export type MarketIntelVenueStream = {
@@ -337,6 +353,7 @@ export type MarketIntelFeedStatus = {
   status: string;
   message: string;
   rows: unknown[];
+  aggregate?: MarketIntelLiquidationAggregate;
 };
 
 export type MarketIntelLiquidation = {
@@ -348,6 +365,23 @@ export type MarketIntelLiquidation = {
   qty: number;
   price: number;
   notional: number;
+};
+
+export type MarketIntelLiquidationDirection = {
+  count: number;
+  notional: number;
+};
+
+export type MarketIntelLiquidationAggregate = {
+  byDirection: Record<'long' | 'short' | 'unknown', MarketIntelLiquidationDirection>;
+  maxEvent: MarketIntelLiquidation | null;
+  last5m: {
+    byDirection: Record<'long' | 'short' | 'unknown', MarketIntelLiquidationDirection>;
+    longNotionalRatio: number | null;
+    shortNotionalRatio: number | null;
+    totalNotional: number;
+    count: number;
+  };
 };
 
 export type MarketIntelStreamStatus = {

@@ -8139,6 +8139,7 @@ def market_intel_summary(
     interval: str = Query(default="15m"),
     lookback_bars: int = Query(default=96, ge=24, le=240),
     depth_limit: int = Query(default=20, ge=5, le=100),
+    stream_window_seconds: int = Query(default=300, ge=300, le=3600),
 ) -> Dict[str, Any]:
     path = _resolve_config_path(config_path)
     if not _config_available(path):
@@ -8153,6 +8154,7 @@ def market_intel_summary(
         interval=interval,
         lookback_bars=lookback_bars,
         depth_limit=depth_limit,
+        stream_window_seconds=stream_window_seconds,
         ttl_seconds=60,
     )
 

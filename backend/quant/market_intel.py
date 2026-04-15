@@ -19,6 +19,8 @@ FUTURES_WS_BASE_URL = "wss://fstream.binance.com/stream"
 
 DEFAULT_TIMEOUT_SECONDS = 4.0
 STREAM_WINDOW_MS = 5 * 60 * 1000
+STREAM_WINDOW_SECONDS_OPTIONS = (5 * 60, 15 * 60, 60 * 60)
+STREAM_RAW_WINDOW_MAXLEN = 12000
 MAX_STREAM_SYMBOLS = 4
 
 
@@ -369,11 +371,101 @@ def _set_connection_status(venue: str, status: str, *, streams: int = 0, error: 
             _STREAM_STATE["errors"].appendleft({"ts": _now_iso(), "venue": venue, "message": error})
 
 
-def _window_for(kind: str, venue: str, symbol: str, maxlen: int = 2000) -> Deque[Dict[str, Any]]:
+def _window_for(kind: str, venue: str, symbol: str, maxlen: int = STREAM_RAW_WINDOW_MAXLEN) -> Deque[Dict[str, Any]]:
     bucket = _STREAM_STATE[kind][venue]
     if symbol not in bucket:
         bucket[symbol] = deque(maxlen=maxlen)
     return bucket[symbol]
+
+
+def _stream_window_ms(window_seconds: int) -> int:
+    try:
+        seconds = int(window_seconds)
+    except Exception:
+        seconds = STREAM_WINDOW_SECONDS_OPTIONS[0]
+    if seconds not in STREAM_WINDOW_SECONDS_OPTIONS:
+        seconds = min(STREAM_WINDOW_SECONDS_OPTIONS, key=lambda item: abs(item - seconds))
+    return seconds * 1000
+
+
+def _series_bucket_ms(window_ms: int) -> int:
+    if window_ms <= 5 * 60 * 1000:
+        return 30 * 1000
+    if window_ms <= 15 * 60 * 1000:
+        return 60 * 1000
+    return 5 * 60 * 1000
+
+
+def _ms_to_iso(ts_ms: int) -> str:
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat()
+
+
+def _window_available_seconds(rows: List[Dict[str, Any]]) -> int:
+    if len(rows) < 2:
+        return 0
+    first = int(_to_float(rows[0].get("tsMs")))
+    last = int(_to_float(rows[-1].get("tsMs")))
+    return max(0, int((last - first) / 1000))
+
+
+def _ofi_series(rows: List[Dict[str, Any]], window_ms: int) -> List[Dict[str, Any]]:
+    bucket_ms = _series_bucket_ms(window_ms)
+    buckets: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        ts_ms = int(_to_float(row.get("tsMs")))
+        if ts_ms <= 0:
+            continue
+        bucket_key = (ts_ms // bucket_ms) * bucket_ms
+        bucket = buckets.setdefault(bucket_key, {"tsMs": bucket_key, "ofi": 0.0, "ofiNormTotal": 0.0, "samples": 0})
+        bucket["ofi"] += _to_float(row.get("ofi"))
+        bucket["ofiNormTotal"] += _to_float(row.get("ofiNorm"))
+        bucket["samples"] += 1
+    out: List[Dict[str, Any]] = []
+    for bucket_key in sorted(buckets.keys()):
+        bucket = buckets[bucket_key]
+        samples = int(bucket.get("samples") or 0)
+        out.append(
+            {
+                "ts": _ms_to_iso(bucket_key),
+                "ofi": _to_float(bucket.get("ofi")),
+                "ofiNorm": _to_float(bucket.get("ofiNormTotal")) / samples if samples > 0 else 0.0,
+                "samples": samples,
+            }
+        )
+    return out
+
+
+def _trade_series(rows: List[Dict[str, Any]], window_ms: int) -> List[Dict[str, Any]]:
+    bucket_ms = _series_bucket_ms(window_ms)
+    buckets: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        ts_ms = int(_to_float(row.get("tsMs")))
+        if ts_ms <= 0:
+            continue
+        bucket_key = (ts_ms // bucket_ms) * bucket_ms
+        bucket = buckets.setdefault(bucket_key, {"tsMs": bucket_key, "buyNotional": 0.0, "sellNotional": 0.0, "samples": 0})
+        if row.get("side") == "buy":
+            bucket["buyNotional"] += _to_float(row.get("notional"))
+        elif row.get("side") == "sell":
+            bucket["sellNotional"] += _to_float(row.get("notional"))
+        bucket["samples"] += 1
+    out: List[Dict[str, Any]] = []
+    for bucket_key in sorted(buckets.keys()):
+        bucket = buckets[bucket_key]
+        buy = _to_float(bucket.get("buyNotional"))
+        sell = _to_float(bucket.get("sellNotional"))
+        total = buy + sell
+        out.append(
+            {
+                "ts": _ms_to_iso(bucket_key),
+                "buyNotional": buy,
+                "sellNotional": sell,
+                "takerBuyRatio": buy / total if total > 0 else 0.0,
+                "imbalance": (buy - sell) / total if total > 0 else 0.0,
+                "samples": int(bucket.get("samples") or 0),
+            }
+        )
+    return out
 
 
 def _record_depth_event(venue: str, symbol: str, payload: Dict[str, Any]) -> None:
@@ -455,24 +547,35 @@ def _record_liquidation_event(payload: Dict[str, Any]) -> None:
         )
 
 
-def _summarize_ofi_window(venue: str, symbol: str, now_ms: int) -> Dict[str, Any]:
+def _summarize_ofi_window(venue: str, symbol: str, now_ms: int, window_ms: int) -> Dict[str, Any]:
     rows = list(_STREAM_STATE["ofiWindows"][venue].get(symbol) or [])
-    rows = [row for row in rows if now_ms - int(row.get("tsMs", 0)) <= STREAM_WINDOW_MS]
+    rows = [row for row in rows if now_ms - int(row.get("tsMs", 0)) <= window_ms]
     if not rows:
-        return {"samples": 0, "ofi": 0.0, "ofiNorm": 0.0, "latestTs": ""}
+        return {"samples": 0, "ofi": 0.0, "ofiNorm": 0.0, "latestTs": "", "availableSeconds": 0, "series": []}
     return {
         "samples": len(rows),
         "ofi": sum(_to_float(row.get("ofi")) for row in rows),
         "ofiNorm": sum(_to_float(row.get("ofiNorm")) for row in rows) / len(rows),
         "latestTs": str(rows[-1].get("ts") or ""),
+        "availableSeconds": _window_available_seconds(rows),
+        "series": _ofi_series(rows, window_ms),
     }
 
 
-def _summarize_trade_window(venue: str, symbol: str, now_ms: int) -> Dict[str, Any]:
+def _summarize_trade_window(venue: str, symbol: str, now_ms: int, window_ms: int) -> Dict[str, Any]:
     rows = list(_STREAM_STATE["tradeWindows"][venue].get(symbol) or [])
-    rows = [row for row in rows if now_ms - int(row.get("tsMs", 0)) <= STREAM_WINDOW_MS]
+    rows = [row for row in rows if now_ms - int(row.get("tsMs", 0)) <= window_ms]
     if not rows:
-        return {"samples": 0, "buyNotional": 0.0, "sellNotional": 0.0, "takerBuyRatio": 0.0, "imbalance": 0.0, "latestTs": ""}
+        return {
+            "samples": 0,
+            "buyNotional": 0.0,
+            "sellNotional": 0.0,
+            "takerBuyRatio": 0.0,
+            "imbalance": 0.0,
+            "latestTs": "",
+            "availableSeconds": 0,
+            "series": [],
+        }
     buy = sum(_to_float(row.get("notional")) for row in rows if row.get("side") == "buy")
     sell = sum(_to_float(row.get("notional")) for row in rows if row.get("side") == "sell")
     total = buy + sell
@@ -483,12 +586,65 @@ def _summarize_trade_window(venue: str, symbol: str, now_ms: int) -> Dict[str, A
         "takerBuyRatio": buy / total if total > 0 else 0.0,
         "imbalance": (buy - sell) / total if total > 0 else 0.0,
         "latestTs": str(rows[-1].get("ts") or ""),
+        "availableSeconds": _window_available_seconds(rows),
+        "series": _trade_series(rows, window_ms),
     }
 
 
-def market_intel_stream_snapshot(selected_symbol: str = "") -> Dict[str, Any]:
+def _liquidation_direction(side: str) -> str:
+    normalized = str(side or "").upper()
+    if normalized == "SELL":
+        return "long"
+    if normalized == "BUY":
+        return "short"
+    return "unknown"
+
+
+def _liquidation_aggregate(rows: List[Dict[str, Any]], now_ms: int) -> Dict[str, Any]:
+    by_direction: Dict[str, Dict[str, Any]] = {
+        "long": {"count": 0, "notional": 0.0},
+        "short": {"count": 0, "notional": 0.0},
+        "unknown": {"count": 0, "notional": 0.0},
+    }
+    five_minute: Dict[str, Dict[str, Any]] = {
+        "long": {"count": 0, "notional": 0.0},
+        "short": {"count": 0, "notional": 0.0},
+        "unknown": {"count": 0, "notional": 0.0},
+    }
+    max_event: Optional[Dict[str, Any]] = None
+    for row in rows:
+        direction = _liquidation_direction(str(row.get("side") or ""))
+        notional = _to_float(row.get("notional"))
+        by_direction[direction]["count"] += 1
+        by_direction[direction]["notional"] += notional
+        if max_event is None or notional > _to_float(max_event.get("notional")):
+            max_event = row
+        try:
+            ts_ms = int(datetime.fromisoformat(str(row.get("ts")).replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:
+            ts_ms = 0
+        if ts_ms > 0 and now_ms - ts_ms <= 5 * 60 * 1000:
+            five_minute[direction]["count"] += 1
+            five_minute[direction]["notional"] += notional
+
+    five_minute_total = sum(_to_float(item.get("notional")) for item in five_minute.values())
+    return {
+        "byDirection": by_direction,
+        "maxEvent": dict(max_event) if max_event else None,
+        "last5m": {
+            "byDirection": five_minute,
+            "longNotionalRatio": five_minute["long"]["notional"] / five_minute_total if five_minute_total > 0 else None,
+            "shortNotionalRatio": five_minute["short"]["notional"] / five_minute_total if five_minute_total > 0 else None,
+            "totalNotional": five_minute_total,
+            "count": sum(int(item.get("count") or 0) for item in five_minute.values()),
+        },
+    }
+
+
+def market_intel_stream_snapshot(selected_symbol: str = "", stream_window_seconds: int = 5 * 60) -> Dict[str, Any]:
     selected = _binance_symbol(selected_symbol)
     now_ms = int(time.time() * 1000)
+    window_ms = _stream_window_ms(stream_window_seconds)
     with _STREAM_LOCK:
         venues: Dict[str, Any] = {}
         for venue in ("spot", "futures"):
@@ -498,8 +654,8 @@ def market_intel_stream_snapshot(selected_symbol: str = "") -> Dict[str, Any]:
             venues[venue] = {
                 symbol: {
                     "orderbook": dict(_STREAM_STATE["orderbooks"][venue].get(symbol) or {}),
-                    "ofi": _summarize_ofi_window(venue, symbol, now_ms),
-                    "flow": _summarize_trade_window(venue, symbol, now_ms),
+                    "ofi": _summarize_ofi_window(venue, symbol, now_ms, window_ms),
+                    "flow": _summarize_trade_window(venue, symbol, now_ms, window_ms),
                 }
                 for symbol in symbols[:12]
             }
@@ -511,7 +667,7 @@ def market_intel_stream_snapshot(selected_symbol: str = "") -> Dict[str, Any]:
             "venues": venues,
             "liquidations": list(_STREAM_STATE["liquidations"])[:50],
             "errors": list(_STREAM_STATE["errors"])[:20],
-            "windowSeconds": int(STREAM_WINDOW_MS / 1000),
+            "windowSeconds": int(window_ms / 1000),
         }
 
 
@@ -600,6 +756,7 @@ def build_market_intel_summary(
     interval: str = "15m",
     lookback_bars: int = 96,
     depth_limit: int = 20,
+    stream_window_seconds: int = 5 * 60,
 ) -> Dict[str, Any]:
     binance_symbols = [_binance_symbol(symbol) for symbol in symbols]
     binance_symbols = list(dict.fromkeys(symbol for symbol in binance_symbols if symbol))
@@ -649,7 +806,7 @@ def build_market_intel_summary(
         except Exception:
             continue
 
-    stream = market_intel_stream_snapshot(selected)
+    stream = market_intel_stream_snapshot(selected, stream_window_seconds=stream_window_seconds)
     stream_venues = stream.get("venues", {}) if isinstance(stream.get("venues"), dict) else {}
     for venue in ("spot", "futures"):
         venue_streams = stream_venues.get(venue, {}) if isinstance(stream_venues.get(venue), dict) else {}
@@ -657,6 +814,7 @@ def build_market_intel_summary(
 
     liquidations = stream.get("liquidations", []) if isinstance(stream.get("liquidations"), list) else []
     stream_status = str(stream.get("status") or "stopped")
+    now_ms = int(time.time() * 1000)
 
     return {
         "ts": _now_iso(),
@@ -679,6 +837,7 @@ def build_market_intel_summary(
             if stream_status == "running"
             else "Binance forceOrder stream is not running.",
             "rows": liquidations,
+            "aggregate": _liquidation_aggregate(liquidations, now_ms),
         },
         "news": {
             "status": "source_not_configured",

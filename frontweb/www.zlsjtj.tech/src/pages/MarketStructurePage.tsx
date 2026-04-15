@@ -1,12 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Card, Col, Empty, Grid, Progress, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { Alert, Card, Col, Empty, Grid, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import ReactECharts from 'echarts-for-react';
 
 import { ActionableErrorAlert } from '@/components/common/ActionableErrorAlert';
 import { useMarketIntelSummaryQuery } from '@/hooks/queries/market';
 import { byLang } from '@/i18n';
-import type { MarketIntelLevel, MarketIntelLiquidation, MarketIntelSessionEffect, MarketIntelVenueSnapshot } from '@/types/api';
+import type {
+  MarketIntelLevel,
+  MarketIntelLiquidation,
+  MarketIntelLiquidationAggregate,
+  MarketIntelSessionEffect,
+  MarketIntelVenue,
+  MarketIntelVenueSnapshot,
+} from '@/types/api';
 import { formatNumber, formatPercent, formatTs } from '@/utils/format';
+
+type StreamWindowSeconds = 300 | 900 | 3600;
+
+type MiniChartPoint = {
+  ts: string;
+  value: number;
+  samples: number;
+};
 
 function compactSymbol(symbol: string) {
   return symbol.replace('/USDT:USDT', '').replace('/USDT', '').replace('USDT', '');
@@ -24,12 +40,122 @@ function barColor(value: number) {
   return '#52c41a';
 }
 
+function pressureText(value?: number | null) {
+  const v = value ?? 0;
+  if (v >= 0.15) return byLang('买方偏强', 'Buy pressure');
+  if (v <= -0.15) return byLang('卖方偏强', 'Sell pressure');
+  return byLang('相对均衡', 'Balanced');
+}
+
+function pressureTagColor(value?: number | null) {
+  const v = value ?? 0;
+  if (v >= 0.15) return 'red';
+  if (v <= -0.15) return 'blue';
+  return 'green';
+}
+
+function coverageText(seconds?: number) {
+  if (!seconds || seconds <= 0) return byLang('等待实时样本', 'Waiting for live samples');
+  if (seconds < 60) return byLang(`约 ${seconds} 秒样本`, `About ${seconds}s covered`);
+  return byLang(`约 ${Math.round(seconds / 60)} 分钟样本`, `About ${Math.round(seconds / 60)}m covered`);
+}
+
+function MiniStreamChart({
+  title,
+  data,
+  color,
+  baseline,
+  min,
+  max,
+}: {
+  title: string;
+  data: MiniChartPoint[];
+  color: string;
+  baseline: number;
+  min?: number;
+  max?: number;
+}) {
+  const option = useMemo(() => {
+    const xs = data.map((point) => point.ts);
+    const ys = data.map((point) => point.value);
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          const point = Array.isArray(params) ? params[0] : params;
+          const value = typeof point?.data === 'number' ? formatPercent(point.data) : '-';
+          return `${formatTs(String(point?.axisValue ?? ''))}<br/>${title}: ${value}`;
+        },
+      },
+      grid: { left: 42, right: 12, top: 10, bottom: 28 },
+      xAxis: {
+        type: 'category',
+        data: xs,
+        axisLabel: {
+          color: 'rgba(215,226,240,0.72)',
+          formatter: (v: string) => formatTs(v, 'HH:mm'),
+        },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        min,
+        max,
+        axisLabel: {
+          color: 'rgba(215,226,240,0.72)',
+          formatter: (v: number) => `${(v * 100).toFixed(0)}%`,
+        },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      },
+      series: [
+        {
+          type: 'line',
+          data: ys,
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 2, color },
+          areaStyle: { opacity: 0.12, color },
+          markLine: {
+            symbol: 'none',
+            label: { show: false },
+            lineStyle: { color: 'rgba(215,226,240,0.34)', type: 'dashed' },
+            data: [{ yAxis: baseline }],
+          },
+        },
+      ],
+    };
+  }, [baseline, color, data, max, min, title]);
+
+  return (
+    <div style={{ minHeight: 172 }}>
+      <Typography.Text strong>{title}</Typography.Text>
+      {data.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={byLang('暂无实时序列', 'No live series yet')} />
+      ) : (
+        <ReactECharts option={option} style={{ height: 146 }} notMerge lazyUpdate />
+      )}
+    </div>
+  );
+}
+
 function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   if (!venue) return null;
   const ob = venue.orderbook;
   const flow = venue.flow;
   const deriv = venue.derivatives;
   const stream = venue.stream;
+  const ofiSeries = (stream?.ofi?.series ?? []).map((point) => ({
+    ts: point.ts,
+    value: point.ofiNorm,
+    samples: point.samples,
+  }));
+  const takerFlowSeries = (stream?.flow?.series ?? []).map((point) => ({
+    ts: point.ts,
+    value: point.takerBuyRatio,
+    samples: point.samples,
+  }));
   return (
     <Card
       title={
@@ -90,8 +216,47 @@ function VenueCard({ venue }: { venue?: MarketIntelVenueSnapshot }) {
           showInfo={false}
           strokeColor={barColor(ob?.imbalance ?? 0)}
         />
+        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <Typography.Text type="secondary">
+            {byLang(
+              '阈值说明：高于 +15% 表示买方压力偏强，低于 -15% 表示卖方压力偏强，中间区间仅表示短窗内相对均衡。',
+              'Thresholds: above +15% indicates stronger buy-side pressure, below -15% indicates stronger sell-side pressure, and the middle band only means the short window is relatively balanced.',
+            )}
+          </Typography.Text>
+          <Space wrap>
+            <Tag color={pressureTagColor(ob?.imbalance)}>{byLang('订单薄', 'Book')}: {pressureText(ob?.imbalance)}</Tag>
+            <Tag color={pressureTagColor(flow?.tradeImbalance)}>{byLang('成交流', 'Flow')}: {pressureText(flow?.tradeImbalance)}</Tag>
+            <Tag color={pressureTagColor(stream?.ofi?.ofiNorm)}>{byLang('实时 OFI', 'Live OFI')}: {pressureText(stream?.ofi?.ofiNorm)}</Tag>
+            <Typography.Text type="secondary">{coverageText(Math.max(stream?.ofi?.availableSeconds ?? 0, stream?.flow?.availableSeconds ?? 0))}</Typography.Text>
+          </Space>
+        </Space>
+      </div>
+      <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+        <Col xs={24} md={12}>
+          <MiniStreamChart
+            title={byLang('实时 OFI 序列', 'Live OFI series')}
+            data={ofiSeries}
+            color={barColor(stream?.ofi?.ofiNorm ?? 0)}
+            baseline={0}
+          />
+        </Col>
+        <Col xs={24} md={12}>
+          <MiniStreamChart
+            title={byLang('实时主动流序列', 'Live taker flow series')}
+            data={takerFlowSeries}
+            color={(stream?.flow?.takerBuyRatio ?? 0.5) >= 0.5 ? '#ff4d4f' : '#1677ff'}
+            baseline={0.5}
+            min={0}
+            max={1}
+          />
+        </Col>
+      </Row>
+      <div style={{ marginTop: 6 }}>
         <Typography.Text type="secondary">
-          {byLang('订单薄偏斜：左侧偏卖盘，右侧偏买盘。', 'Book skew: left leans ask-heavy, right leans bid-heavy.')}
+          {byLang(
+            '这些指标用于监测短窗供需压力，不能单独作为交易建议。',
+            'These indicators monitor short-window pressure and are not standalone trading advice.',
+          )}
         </Typography.Text>
       </div>
     </Card>
@@ -215,13 +380,131 @@ function SessionEffectTable({ rows }: { rows?: MarketIntelSessionEffect[] }) {
   );
 }
 
+function liquidationSideText(side?: string) {
+  const normalized = String(side ?? '').toUpperCase();
+  if (normalized === 'SELL') return byLang('多头爆仓', 'Long liquidation');
+  if (normalized === 'BUY') return byLang('空头爆仓', 'Short liquidation');
+  return byLang('未知方向', 'Unknown side');
+}
+
+function LiquidationPanel({
+  rows,
+  status,
+  apiAggregate,
+}: {
+  rows: MarketIntelLiquidation[];
+  status?: string;
+  apiAggregate?: MarketIntelLiquidationAggregate;
+}) {
+  const fallbackAggregate = useMemo(() => {
+    const byDirection = {
+      long: { count: 0, notional: 0 },
+      short: { count: 0, notional: 0 },
+      unknown: { count: 0, notional: 0 },
+    };
+    let maxEvent: MarketIntelLiquidation | null = null;
+    const now = Date.now();
+    const last5m = {
+      byDirection: {
+        long: { count: 0, notional: 0 },
+        short: { count: 0, notional: 0 },
+        unknown: { count: 0, notional: 0 },
+      },
+      totalNotional: 0,
+      count: 0,
+    };
+    for (const row of rows) {
+      const side = String(row.side ?? '').toUpperCase();
+      const direction = side === 'SELL' ? 'long' : side === 'BUY' ? 'short' : 'unknown';
+      byDirection[direction].count += 1;
+      byDirection[direction].notional += row.notional;
+      if (!maxEvent || row.notional > maxEvent.notional) maxEvent = row;
+      const ts = Date.parse(row.ts);
+      if (Number.isFinite(ts) && now - ts <= 5 * 60 * 1000) {
+        last5m.byDirection[direction].count += 1;
+        last5m.byDirection[direction].notional += row.notional;
+        last5m.totalNotional += row.notional;
+        last5m.count += 1;
+      }
+    }
+    return {
+      byDirection,
+      maxEvent,
+      last5m: {
+        ...last5m,
+        longNotionalRatio: last5m.totalNotional > 0 ? last5m.byDirection.long.notional / last5m.totalNotional : null,
+        shortNotionalRatio: last5m.totalNotional > 0 ? last5m.byDirection.short.notional / last5m.totalNotional : null,
+      },
+    };
+  }, [rows]);
+  const aggregate = apiAggregate ?? fallbackAggregate;
+
+  return (
+    <Card title={byLang('爆仓流', 'Liquidations')}>
+      {rows.length === 0 ? (
+        <Typography.Text type="secondary">
+          {status === 'running'
+            ? byLang(
+              '实时流已连接；只有发生强平时这里才会出现记录。没有爆仓不是错误。',
+              'Stream is connected; rows appear only when a liquidation occurs. No liquidation is not an error.',
+            )
+            : byLang('爆仓实时流未运行。', 'Liquidation stream is not running.')}
+        </Typography.Text>
+      ) : (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row gutter={[12, 12]}>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('多头爆仓名义额', 'Long liq notional')} value={aggregate.byDirection.long.notional} precision={0} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('空头爆仓名义额', 'Short liq notional')} value={aggregate.byDirection.short.notional} precision={0} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最大单笔', 'Largest order')} value={aggregate.maxEvent?.notional ?? 0} precision={0} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最近 5 分钟笔数', 'Last 5m orders')} value={aggregate.last5m.count} />
+            </Col>
+          </Row>
+          <div>
+            <Space wrap style={{ marginBottom: 6 }}>
+              <Typography.Text type="secondary">{byLang('最近 5 分钟多空名义额比例', 'Last 5m long/short notional ratio')}</Typography.Text>
+              <Tag color="red">{byLang('多头爆仓', 'Long liq')}: {aggregate.last5m.longNotionalRatio == null ? '-' : formatPercent(aggregate.last5m.longNotionalRatio)}</Tag>
+              <Tag color="blue">{byLang('空头爆仓', 'Short liq')}: {aggregate.last5m.shortNotionalRatio == null ? '-' : formatPercent(aggregate.last5m.shortNotionalRatio)}</Tag>
+            </Space>
+            <Progress
+              percent={Math.round((aggregate.last5m.longNotionalRatio ?? 0) * 100)}
+              success={{ percent: Math.round((aggregate.last5m.shortNotionalRatio ?? 0) * 100), strokeColor: '#1677ff' }}
+              strokeColor="#ff4d4f"
+              showInfo={false}
+            />
+          </div>
+          <Table
+            size="small"
+            pagination={false}
+            dataSource={rows.slice(0, 8).map((row, idx) => ({ ...row, key: `${row.ts}-${idx}` }))}
+            columns={[
+              { title: byLang('时间', 'Time'), dataIndex: 'ts', render: (v: string) => formatTs(v) },
+              { title: byLang('标的', 'Symbol'), dataIndex: 'symbol' },
+              { title: byLang('方向', 'Side'), dataIndex: 'side', render: (v: string) => liquidationSideText(v) },
+              { title: byLang('名义额', 'Notional'), dataIndex: 'notional', render: (v: number) => formatNumber(v, 0) },
+            ]}
+          />
+        </Space>
+      )}
+    </Card>
+  );
+}
+
 export function MarketStructurePage() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const [symbol, setSymbol] = useState<string | undefined>(undefined);
-  const query = useMarketIntelSummaryQuery(symbol);
+  const [primaryVenue, setPrimaryVenue] = useState<MarketIntelVenue>('futures');
+  const [streamWindowSeconds, setStreamWindowSeconds] = useState<StreamWindowSeconds>(300);
+  const query = useMarketIntelSummaryQuery(symbol, streamWindowSeconds);
   const data = query.data;
-  const selectedVenue = data?.venues.futures?.ok ? data.venues.futures : data?.venues.spot;
+  const selectedVenue = data?.venues[primaryVenue];
   const liquidationRows = (data?.liquidations.rows ?? []) as MarketIntelLiquidation[];
 
   useEffect(() => {
@@ -233,6 +516,17 @@ export function MarketStructurePage() {
     label: item,
   }));
 
+  const venueOptions = [
+    { value: 'futures', label: byLang('合约主视角', 'Futures view') },
+    { value: 'spot', label: byLang('现货主视角', 'Spot view') },
+  ];
+
+  const streamWindowOptions = [
+    { value: 300, label: byLang('最近 5 分钟', 'Last 5m') },
+    { value: 900, label: byLang('最近 15 分钟', 'Last 15m') },
+    { value: 3600, label: byLang('最近 1 小时', 'Last 1h') },
+  ];
+
   return (
     <div className="page-shell">
       <div className="page-header">
@@ -241,15 +535,31 @@ export function MarketStructurePage() {
             {byLang('市场结构', 'Market Structure')}
           </Typography.Title>
           <Typography.Text type="secondary">
-            {byLang('现货和合约分开看；资金费率、持仓量、爆仓只属于合约侧。', 'Spot and futures are separate; funding, OI and liquidations belong to derivatives.')}
+            {byLang(
+              '现货和合约分开看；这些数据用于监测市场结构和辅助判断，不构成交易建议。',
+              'Spot and futures are separated; these data monitor market structure and support judgment, not trading advice.',
+            )}
           </Typography.Text>
         </div>
-        <Select
-          style={{ width: isMobile ? '100%' : 240 }}
-          value={symbol ?? data?.selectedSymbol}
-          options={options}
-          onChange={(value) => setSymbol(value)}
-        />
+        <Space wrap style={{ width: isMobile ? '100%' : undefined, justifyContent: isMobile ? 'stretch' : 'flex-end' }}>
+          <Select
+            style={{ width: isMobile ? '100%' : 240 }}
+            value={symbol ?? data?.selectedSymbol}
+            options={options}
+            onChange={(value) => setSymbol(value)}
+          />
+          <Select
+            style={{ width: isMobile ? '100%' : 160 }}
+            value={primaryVenue}
+            options={venueOptions}
+            onChange={(value) => setPrimaryVenue(value)}
+          />
+          <Segmented
+            value={streamWindowSeconds}
+            options={streamWindowOptions}
+            onChange={(value) => setStreamWindowSeconds(Number(value) as StreamWindowSeconds)}
+          />
+        </Space>
       </div>
 
       {query.isError ? (
@@ -269,6 +579,7 @@ export function MarketStructurePage() {
           <Tag>{data?.source ?? 'binance-public'}</Tag>
           <Typography.Text type="secondary">{byLang('更新时间', 'Updated')}: {formatTs(data?.ts)}</Typography.Text>
           <Typography.Text type="secondary">{byLang('周期', 'Interval')}: {data?.interval ?? '15m'}</Typography.Text>
+          <Typography.Text type="secondary">{byLang('实时窗口', 'Live window')}: {streamWindowOptions.find((item) => item.value === (data?.stream?.windowSeconds ?? streamWindowSeconds))?.label}</Typography.Text>
           <Typography.Text type="secondary">{byLang('缓存', 'Cache')}: {data?.cache?.hit ? byLang('命中', 'hit') : byLang('刷新', 'miss')}</Typography.Text>
           <Typography.Text type="secondary">{byLang('实时流', 'Stream')}: {data?.stream?.status ?? 'stopped'}</Typography.Text>
           {Object.entries(data?.stream?.connections ?? {}).map(([venue, conn]) => (
@@ -301,27 +612,7 @@ export function MarketStructurePage() {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title={byLang('爆仓流', 'Liquidations')}>
-            {liquidationRows.length === 0 ? (
-              <Typography.Text type="secondary">
-                {data?.liquidations.status === 'running'
-                  ? byLang('实时流已连接；只有发生强平时这里才会出现记录。', 'Stream is connected; rows appear only when a liquidation occurs.')
-                  : byLang('爆仓实时流未运行。', 'Liquidation stream is not running.')}
-              </Typography.Text>
-            ) : (
-              <Table
-                size="small"
-                pagination={false}
-                dataSource={liquidationRows.slice(0, 8).map((row, idx) => ({ ...row, key: `${row.ts}-${idx}` }))}
-                columns={[
-                  { title: byLang('时间', 'Time'), dataIndex: 'ts', render: (v: string) => formatTs(v) },
-                  { title: byLang('标的', 'Symbol'), dataIndex: 'symbol' },
-                  { title: byLang('方向', 'Side'), dataIndex: 'side' },
-                  { title: byLang('名义额', 'Notional'), dataIndex: 'notional', render: (v: number) => formatNumber(v, 0) },
-                ]}
-              />
-            )}
-          </Card>
+          <LiquidationPanel rows={liquidationRows} status={data?.liquidations.status} apiAggregate={data?.liquidations.aggregate} />
         </Col>
         <Col xs={24} lg={12}>
           <Card title={byLang('新闻 NLP / 情绪', 'News NLP / sentiment')}>
