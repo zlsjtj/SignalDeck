@@ -8137,7 +8137,7 @@ def market_intel_summary(
     symbol: str = Query(default="BTCUSDT"),
     config_path: str = Query(default=_DEFAULT_CONFIG_PATH),
     interval: str = Query(default="15m"),
-    lookback_bars: int = Query(default=96, ge=24, le=240),
+    lookback_bars: int = Query(default=96, ge=24, le=1000),
     depth_limit: int = Query(default=20, ge=5, le=100),
     stream_window_seconds: int = Query(default=300, ge=300, le=3600),
 ) -> Dict[str, Any]:

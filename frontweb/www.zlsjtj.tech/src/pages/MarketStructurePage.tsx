@@ -33,9 +33,11 @@ type PressureMetric = 'book' | 'flow' | 'ofi';
 type PressureDirection = 'buy' | 'sell' | 'balanced' | 'unknown';
 type SessionTimezone = 'utc' | 'asia-shanghai';
 type OiPeriod = '15m' | '30m' | '1h' | '4h' | '1d';
+type MarketLookbackBars = 96 | 288 | 672 | 1000;
 
 const PRESSURE_THRESHOLD = 0.15;
 const OI_PERIODS: OiPeriod[] = ['15m', '30m', '1h', '4h', '1d'];
+const MARKET_LOOKBACK_OPTIONS: MarketLookbackBars[] = [96, 288, 672, 1000];
 const WEEKDAY_LABELS_ZH = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const WEEKDAY_LABELS_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -115,6 +117,13 @@ function displayWeekday(weekdayUtc: number, hourUtc: number, timezone: SessionTi
 
 function timezoneLabel(timezone: SessionTimezone) {
   return timezone === 'asia-shanghai' ? 'Asia/Shanghai' : 'UTC';
+}
+
+function lookbackLabel(bars: number) {
+  const hours = Math.round((bars * 15) / 60);
+  if (hours < 24) return byLang(`${hours} 小时`, `${hours}h`);
+  const days = Math.round(hours / 24);
+  return byLang(`约 ${days} 天`, `About ${days}d`);
 }
 
 function MiniStreamChart({
@@ -839,6 +848,138 @@ function MetricGroup({ title, children }: { title: string; children: ReactNode }
   );
 }
 
+function MicrostructureFocusPanel({
+  venue,
+  secondaryVenue,
+  streamWindowSeconds,
+}: {
+  venue?: MarketIntelVenueSnapshot;
+  secondaryVenue?: MarketIntelVenueSnapshot;
+  streamWindowSeconds: StreamWindowSeconds;
+}) {
+  const flow = venue?.flow;
+  const streamFlow = venue?.stream?.flow;
+  const ofi = venue?.stream?.ofi;
+  const book = venue?.orderbook;
+  const liveFlowSeries = useMemo(() => streamFlow?.series ?? [], [streamFlow?.series]);
+  const ofiSeries = useMemo(() => ofi?.series ?? [], [ofi?.series]);
+  const timestamps = useMemo(() => Array.from(new Set([...liveFlowSeries.map((point) => point.ts), ...ofiSeries.map((point) => point.ts)])).sort(), [liveFlowSeries, ofiSeries]);
+  const primaryFlowDirection = pressureDirection(flow?.tradeImbalance);
+  const liveFlowDirection = pressureDirection(streamFlow?.imbalance);
+  const ofiDirection = pressureDirection(ofi?.ofiNorm);
+  const bookDirection = pressureDirection(book?.imbalance);
+  const divergence = [primaryFlowDirection, liveFlowDirection, ofiDirection, bookDirection].filter((item) => item === 'buy' || item === 'sell');
+  const hasDivergence = divergence.includes('buy') && divergence.includes('sell');
+  const option = useMemo(() => {
+    const takerValues = new Map(liveFlowSeries.map((point) => [point.ts, point.takerBuyRatio]));
+    const flowImbalanceValues = new Map(liveFlowSeries.map((point) => [point.ts, point.imbalance]));
+    const ofiValues = new Map(ofiSeries.map((point) => [point.ts, point.ofiNorm]));
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params];
+          const lines = items.map((item) => `${item.seriesName}: ${typeof item.data === 'number' ? signedPercent(item.data) : '-'}`);
+          return `${formatTs(String(items[0]?.axisValue ?? ''))}<br/>${lines.join('<br/>')}`;
+        },
+      },
+      legend: { top: 0, textStyle: { color: 'rgba(215,226,240,0.72)' } },
+      grid: { left: 46, right: 16, top: 38, bottom: 30 },
+      xAxis: {
+        type: 'category',
+        data: timestamps,
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: string) => formatTs(v, 'HH:mm') },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        min: -1,
+        max: 1,
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: number) => `${(v * 100).toFixed(0)}%` },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      },
+      series: [
+        {
+          name: 'Taker buy - 50%',
+          type: 'line',
+          smooth: true,
+          showSymbol: false,
+          data: timestamps.map((ts) => (takerValues.has(ts) ? (takerValues.get(ts) ?? 0.5) - 0.5 : null)),
+          lineStyle: { width: 2, color: '#faad14' },
+        },
+        {
+          name: 'Flow skew',
+          type: 'line',
+          smooth: true,
+          showSymbol: false,
+          data: timestamps.map((ts) => flowImbalanceValues.get(ts) ?? null),
+          lineStyle: { width: 2, color: '#ff4d4f' },
+        },
+        {
+          name: 'OFI',
+          type: 'line',
+          smooth: true,
+          showSymbol: false,
+          data: timestamps.map((ts) => ofiValues.get(ts) ?? null),
+          lineStyle: { width: 2, color: '#1677ff' },
+        },
+      ],
+    };
+  }, [liveFlowSeries, ofiSeries, timestamps]);
+
+  return (
+    <Card title={byLang('Taker ratio / OFI 核心监控', 'Taker ratio / OFI core monitor')}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type={hasDivergence ? 'warning' : 'info'}
+          showIcon
+          message={hasDivergence ? byLang('成交与订单薄压力出现背离', 'Trade flow and book pressure are diverging') : byLang('成交与订单薄压力未出现明显背离', 'No clear divergence between trade flow and book pressure')}
+          description={byLang(
+            'Taker ratio 看主动成交方向，OFI 看订单薄更新压力，Level 2 偏斜看静态深度；三者一起用于观察短窗微观结构。',
+            'Taker ratio tracks aggressive trade direction, OFI tracks book-update pressure, and Level 2 skew tracks displayed depth; together they monitor short-window microstructure.',
+          )}
+        />
+        <Row gutter={[12, 12]}>
+          <Col xs={12} md={6}>
+            <Statistic title="Taker buy" value={flow?.takerBuyRatio == null ? '-' : formatPercent(flow.takerBuyRatio)} valueStyle={{ color: barColor((flow?.takerBuyRatio ?? 0.5) - 0.5) }} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时 Taker buy', 'Live taker buy')} value={streamFlow?.takerBuyRatio == null ? '-' : formatPercent(streamFlow.takerBuyRatio)} valueStyle={{ color: barColor((streamFlow?.takerBuyRatio ?? 0.5) - 0.5) }} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title="OFI" value={signedPercent(ofi?.ofiNorm)} valueStyle={{ color: barColor(ofi?.ofiNorm ?? 0) }} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('Level 2 偏斜', 'Level 2 skew')} value={signedPercent(book?.imbalance)} valueStyle={{ color: barColor(book?.imbalance ?? 0) }} />
+          </Col>
+        </Row>
+        <Space wrap>
+          <Typography.Text type="secondary">{byLang('方向检查', 'Direction check')}:</Typography.Text>
+          <Space size={4}>REST Flow {directionTag(primaryFlowDirection)}</Space>
+          <Space size={4}>Live Flow {directionTag(liveFlowDirection)}</Space>
+          <Space size={4}>OFI {directionTag(ofiDirection)}</Space>
+          <Space size={4}>Book {directionTag(bookDirection)}</Space>
+          <Tag>{byLang('窗口', 'Window')}: {streamWindowSeconds / 60}m</Tag>
+          <Tag>{byLang('辅助视角', 'Secondary')}: {signedPercent(secondaryVenue?.flow?.tradeImbalance)}</Tag>
+        </Space>
+        {timestamps.length === 0 ? (
+          <Empty description={byLang('等待实时 Taker / OFI 序列样本', 'Waiting for live Taker / OFI series samples')} />
+        ) : (
+          <ReactECharts option={option} style={{ height: 286 }} notMerge lazyUpdate />
+        )}
+        <Typography.Text type="secondary">
+          {byLang(
+            'Taker buy 在图中减去 50% 后展示，便于和 Flow skew、OFI 在同一坐标比较；这些是监测指标，不是交易建议。',
+            'Taker buy is shown minus 50% so it can be compared with Flow skew and OFI on the same axis; these are monitoring metrics, not trading advice.',
+          )}
+        </Typography.Text>
+      </Space>
+    </Card>
+  );
+}
+
 function VenueCard({
   venue,
   isPrimary,
@@ -1037,14 +1178,24 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
     const bids = ob?.bids ?? [];
     const asks = ob?.asks ?? [];
     const max = Math.max(bids.length, asks.length);
+    let cumulativeBid = 0;
+    let cumulativeAsk = 0;
     return Array.from({ length: Math.min(max, 12) }, (_, idx) => ({
       key: idx,
       bid: bids[idx],
       ask: asks[idx],
+      bidCumulative: bids[idx] ? (cumulativeBid += bids[idx].notional) : cumulativeBid,
+      askCumulative: asks[idx] ? (cumulativeAsk += asks[idx].notional) : cumulativeAsk,
     }));
   }, [ob]);
+  const totalBid = ob?.bidNotional ?? 0;
+  const totalAsk = ob?.askNotional ?? 0;
+  const totalDepth = totalBid + totalAsk;
+  const topBidShare = totalBid > 0 ? (ob?.bids?.[0]?.notional ?? 0) / totalBid : 0;
+  const topAskShare = totalAsk > 0 ? (ob?.asks?.[0]?.notional ?? 0) / totalAsk : 0;
+  const depthImbalance = ob?.imbalance ?? 0;
 
-  const columns: ColumnsType<{ key: number; bid?: MarketIntelLevel; ask?: MarketIntelLevel }> = [
+  const columns: ColumnsType<{ key: number; bid?: MarketIntelLevel; ask?: MarketIntelLevel; bidCumulative: number; askCumulative: number }> = [
     {
       title: byLang('买价', 'Bid price'),
       dataIndex: 'bid',
@@ -1063,6 +1214,12 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
       render: (level?: MarketIntelLevel) => level ? formatNumber(level.notional, 0) : '-',
     },
     {
+      title: byLang('买盘累计', 'Bid cumulative'),
+      dataIndex: 'bidCumulative',
+      responsive: ['xl'],
+      render: (v: number) => formatNumber(v, 0),
+    },
+    {
       title: byLang('卖价', 'Ask price'),
       dataIndex: 'ask',
       render: (level?: MarketIntelLevel) => level ? formatNumber(level.price, 2) : '-',
@@ -1079,6 +1236,12 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
       responsive: ['lg'],
       render: (level?: MarketIntelLevel) => level ? formatNumber(level.notional, 0) : '-',
     },
+    {
+      title: byLang('卖盘累计', 'Ask cumulative'),
+      dataIndex: 'askCumulative',
+      responsive: ['xl'],
+      render: (v: number) => formatNumber(v, 0),
+    },
   ];
 
   return (
@@ -1093,7 +1256,44 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
       {rows.length === 0 ? (
         <Empty description={byLang('主视角暂无订单薄快照', 'No primary-view book snapshot')} />
       ) : (
-        <Table size="small" pagination={false} columns={columns} dataSource={rows} />
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row gutter={[12, 12]}>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('买盘深度', 'Bid depth')} value={formatNumber(totalBid, 0)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('卖盘深度', 'Ask depth')} value={formatNumber(totalAsk, 0)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('深度偏斜', 'Depth skew')} value={signedPercent(depthImbalance)} valueStyle={{ color: barColor(depthImbalance) }} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('价差', 'Spread')} value={formatPercent(ob?.spreadPct ?? 0, 3)} />
+            </Col>
+          </Row>
+          <div>
+            <Space wrap style={{ marginBottom: 6 }}>
+              <Typography.Text type="secondary">{byLang('买卖盘深度占比', 'Bid/ask depth share')}</Typography.Text>
+              <Tag color="red">{byLang('买盘', 'Bid')}: {totalDepth > 0 ? formatPercent(totalBid / totalDepth) : '-'}</Tag>
+              <Tag color="blue">{byLang('卖盘', 'Ask')}: {totalDepth > 0 ? formatPercent(totalAsk / totalDepth) : '-'}</Tag>
+              <Tag>{byLang('买一集中度', 'Top bid concentration')}: {formatPercent(topBidShare)}</Tag>
+              <Tag>{byLang('卖一集中度', 'Top ask concentration')}: {formatPercent(topAskShare)}</Tag>
+            </Space>
+            <Progress
+              percent={Math.round((totalDepth > 0 ? totalBid / totalDepth : 0) * 100)}
+              success={{ percent: Math.round((totalDepth > 0 ? totalAsk / totalDepth : 0) * 100), strokeColor: '#1677ff' }}
+              strokeColor="#ff4d4f"
+              showInfo={false}
+            />
+          </div>
+          <Table size="small" pagination={false} columns={columns} dataSource={rows} />
+          <Typography.Text type="secondary">
+            {byLang(
+              '累计深度用于观察挂单墙和深度集中度；订单薄是快照，可能快速变化。',
+              'Cumulative depth helps inspect displayed walls and concentration; the order book is a snapshot and can change quickly.',
+            )}
+          </Typography.Text>
+        </Space>
       )}
     </Card>
   );
@@ -1488,6 +1688,152 @@ function SessionHeatmap({
   );
 }
 
+function SessionResearchPanel({
+  venue,
+  timezone,
+  lookbackBars,
+}: {
+  venue?: MarketIntelVenueSnapshot;
+  timezone: SessionTimezone;
+  lookbackBars: number;
+}) {
+  const sessionRows = useMemo(() => {
+    const buckets = new Map<number, { hour: number; count: number; avgReturnPct: number; avgVolume: number }>();
+    for (const row of venue?.sessionEffect ?? []) {
+      const hour = displayHour(row.hourUtc, timezone);
+      const existing = buckets.get(hour);
+      if (!existing) {
+        buckets.set(hour, { hour, count: row.count, avgReturnPct: row.avgReturnPct, avgVolume: row.avgVolume });
+      } else {
+        const totalCount = existing.count + row.count;
+        buckets.set(hour, {
+          hour,
+          count: totalCount,
+          avgReturnPct: totalCount > 0 ? ((existing.avgReturnPct * existing.count) + (row.avgReturnPct * row.count)) / totalCount : 0,
+          avgVolume: totalCount > 0 ? ((existing.avgVolume * existing.count) + (row.avgVolume * row.count)) / totalCount : 0,
+        });
+      }
+    }
+    return Array.from({ length: 24 }, (_, hour) => buckets.get(hour) ?? { hour, count: 0, avgReturnPct: 0, avgVolume: 0 });
+  }, [timezone, venue?.sessionEffect]);
+  const totalBars = sessionRows.reduce((sum, row) => sum + row.count, 0);
+  const avgVolume = totalBars > 0 ? sessionRows.reduce((sum, row) => sum + row.avgVolume * row.count, 0) / totalBars : 0;
+  const activeHours = [...sessionRows].filter((row) => row.count > 0).sort((a, b) => b.avgVolume - a.avgVolume).slice(0, 4);
+  const positiveHours = [...sessionRows].filter((row) => row.count > 0).sort((a, b) => b.avgReturnPct - a.avgReturnPct).slice(0, 3);
+  const negativeHours = [...sessionRows].filter((row) => row.count > 0).sort((a, b) => a.avgReturnPct - b.avgReturnPct).slice(0, 3);
+  const sampleCoverage = totalBars > 0 ? Math.min(1, totalBars / Math.max(1, lookbackBars)) : 0;
+  const option = useMemo(() => ({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any) => {
+        const items = Array.isArray(params) ? params : [params];
+        const idx = Number(items[0]?.dataIndex ?? 0);
+        const row = sessionRows[idx];
+        return [
+          `${String(row?.hour ?? 0).padStart(2, '0')}:00 ${timezoneLabel(timezone)}`,
+          `${byLang('均量', 'Avg volume')}: ${formatNumber(row?.avgVolume ?? 0, 2)}`,
+          `${byLang('均值收益', 'Avg return')}: ${signedPercent(row?.avgReturnPct ?? 0, 3)}`,
+          `${byLang('样本', 'Bars')}: ${row?.count ?? 0}`,
+        ].join('<br/>');
+      },
+    },
+    legend: { top: 0, textStyle: { color: 'rgba(215,226,240,0.72)' } },
+    grid: { left: 52, right: 42, top: 36, bottom: 34 },
+    xAxis: {
+      type: 'category',
+      data: sessionRows.map((row) => `${String(row.hour).padStart(2, '0')}:00`),
+      axisLabel: { color: 'rgba(215,226,240,0.72)' },
+      axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+      axisTick: { show: false },
+    },
+    yAxis: [
+      {
+        type: 'value',
+        name: byLang('均量', 'Avg volume'),
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: number) => formatNumber(v, 0) },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      },
+      {
+        type: 'value',
+        name: byLang('收益', 'Return'),
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: number) => `${(v * 100).toFixed(1)}%` },
+        splitLine: { show: false },
+      },
+    ],
+    series: [
+      {
+        name: byLang('均量', 'Avg volume'),
+        type: 'bar',
+        data: sessionRows.map((row) => row.avgVolume),
+        itemStyle: { color: '#faad14' },
+      },
+      {
+        name: byLang('均值收益', 'Avg return'),
+        type: 'line',
+        yAxisIndex: 1,
+        smooth: true,
+        data: sessionRows.map((row) => row.avgReturnPct),
+        lineStyle: { width: 2, color: '#1677ff' },
+      },
+    ],
+  }), [sessionRows, timezone]);
+
+  return (
+    <Card title={byLang('时间段效应研究', 'Session effect research')}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Row gutter={[12, 12]}>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('回看样本', 'Lookback bars')} value={lookbackBars} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('有效样本', 'Covered bars')} value={totalBars} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('样本覆盖', 'Sample coverage')} value={formatPercent(sampleCoverage)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('全时段均量', 'All-hour avg volume')} value={formatNumber(avgVolume, 2)} />
+          </Col>
+        </Row>
+        <Space wrap>
+          <Typography.Text type="secondary">{byLang('活跃时段', 'Active hours')}:</Typography.Text>
+          {activeHours.map((row) => (
+            <Tag key={`active-${row.hour}`} color="gold">
+              {String(row.hour).padStart(2, '0')}:00 {formatNumber(row.avgVolume, 0)}
+            </Tag>
+          ))}
+        </Space>
+        <Space wrap>
+          <Typography.Text type="secondary">{byLang('收益偏正', 'Positive return bias')}:</Typography.Text>
+          {positiveHours.map((row) => (
+            <Tag key={`positive-${row.hour}`} color="red">
+              {String(row.hour).padStart(2, '0')}:00 {signedPercent(row.avgReturnPct, 3)}
+            </Tag>
+          ))}
+          <Typography.Text type="secondary">{byLang('收益偏负', 'Negative return bias')}:</Typography.Text>
+          {negativeHours.map((row) => (
+            <Tag key={`negative-${row.hour}`} color="blue">
+              {String(row.hour).padStart(2, '0')}:00 {signedPercent(row.avgReturnPct, 3)}
+            </Tag>
+          ))}
+        </Space>
+        {totalBars === 0 ? (
+          <Empty description={byLang('暂无足够样本进行时间段研究', 'Not enough samples for session research')} />
+        ) : (
+          <ReactECharts option={option} style={{ height: 300 }} notMerge lazyUpdate />
+        )}
+        <Typography.Text type="secondary">
+          {byLang(
+            '时间段效应用历史 15m K 线聚合，样本越长越适合观察稳定模式；样本少时只作为监测参考。',
+            'Session effects aggregate historical 15m klines; longer samples are better for stable patterns, while sparse samples are monitoring context only.',
+          )}
+        </Typography.Text>
+      </Space>
+    </Card>
+  );
+}
+
 function StreamObservability({ stream }: { stream?: MarketIntelStreamStatus }) {
   const connectionRows = Object.entries(stream?.connections ?? {}).map(([venue, conn]) => ({
     key: venue,
@@ -1831,8 +2177,9 @@ export function MarketStructurePage() {
   const [symbol, setSymbol] = useState<string | undefined>(undefined);
   const [primaryVenue, setPrimaryVenue] = useState<MarketIntelVenue>('futures');
   const [streamWindowSeconds, setStreamWindowSeconds] = useState<StreamWindowSeconds>(300);
+  const [lookbackBars, setLookbackBars] = useState<MarketLookbackBars>(672);
   const [sessionTimezone, setSessionTimezone] = useState<SessionTimezone>('utc');
-  const query = useMarketIntelSummaryQuery(symbol, streamWindowSeconds);
+  const query = useMarketIntelSummaryQuery(symbol, streamWindowSeconds, lookbackBars);
   const data = query.data;
   const selectedVenue = data?.venues[primaryVenue];
   const secondaryVenueKey: MarketIntelVenue = primaryVenue === 'futures' ? 'spot' : 'futures';
@@ -1858,6 +2205,10 @@ export function MarketStructurePage() {
     { value: 900, label: byLang('最近 15 分钟', 'Last 15m') },
     { value: 3600, label: byLang('最近 1 小时', 'Last 1h') },
   ];
+  const lookbackOptions = MARKET_LOOKBACK_OPTIONS.map((value) => ({
+    value,
+    label: lookbackLabel(value),
+  }));
 
   return (
     <div className="page-shell">
@@ -1890,6 +2241,12 @@ export function MarketStructurePage() {
             value={streamWindowSeconds}
             options={streamWindowOptions}
             onChange={(value) => setStreamWindowSeconds(Number(value) as StreamWindowSeconds)}
+          />
+          <Select
+            style={{ width: isMobile ? '100%' : 132 }}
+            value={lookbackBars}
+            options={lookbackOptions}
+            onChange={(value) => setLookbackBars(Number(value) as MarketLookbackBars)}
           />
         </Space>
       </div>
@@ -1967,10 +2324,15 @@ export function MarketStructurePage() {
         id="market-live-flow"
         title={byLang('实时盘口与主动流', 'Live book and taker flow')}
         description={byLang(
-          '这里集中查看 Level 2 订单薄、Taker ratio、OFI、volume ratio 和 Spot/Futures 主辅视角。',
-          'Use this section for Level 2 order book, Taker ratio, OFI, volume ratio and Spot/Futures primary-secondary views.',
+          '核心查看 Taker ratio、OFI、Level 2 订单薄和 Spot/Futures 主辅视角。',
+          'Use this core section for Taker ratio, OFI, Level 2 order book and Spot/Futures primary-secondary views.',
         )}
       >
+        <MicrostructureFocusPanel
+          venue={selectedVenue}
+          secondaryVenue={secondaryVenue}
+          streamWindowSeconds={streamWindowSeconds}
+        />
         <Row gutter={[16, 16]}>
           <Col xs={24} xl={14}>
             <VenueCard venue={selectedVenue} isPrimary streamWindowSeconds={streamWindowSeconds} />
@@ -2013,7 +2375,7 @@ export function MarketStructurePage() {
       >
         <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
           <Typography.Text type="secondary">
-            {byLang('显示时区', 'Display timezone')}: {timezoneLabel(sessionTimezone)}
+            {byLang('显示时区', 'Display timezone')}: {timezoneLabel(sessionTimezone)} · {byLang('回看', 'Lookback')}: {lookbackLabel(data?.lookbackBars ?? lookbackBars)}
           </Typography.Text>
           <Segmented
             value={sessionTimezone}
@@ -2024,6 +2386,7 @@ export function MarketStructurePage() {
             onChange={(value) => setSessionTimezone(value as SessionTimezone)}
           />
         </Space>
+        <SessionResearchPanel venue={selectedVenue} timezone={sessionTimezone} lookbackBars={data?.lookbackBars ?? lookbackBars} />
         <Row gutter={[16, 16]}>
           <Col xs={24} xl={10}>
             <SessionEffectTable venue={selectedVenue} timezone={sessionTimezone} />

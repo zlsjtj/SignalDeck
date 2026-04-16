@@ -481,14 +481,14 @@ export const quantApi = {
       .slice(-96);
   },
 
-  async getMarketIntelSummary(symbol?: string, streamWindowSeconds = 300): Promise<MarketIntelSummary> {
+  async getMarketIntelSummary(symbol?: string, streamWindowSeconds = 300, lookbackBars = 96): Promise<MarketIntelSummary> {
     const configPath = await resolveMarketConfigPath(false);
     const { data } = await http.get<MarketIntelSummary>('/market/intel/summary', {
       params: {
         symbol,
         config_path: configPath,
         interval: '15m',
-        lookback_bars: 96,
+        lookback_bars: lookbackBars,
         depth_limit: 20,
         stream_window_seconds: streamWindowSeconds,
       },

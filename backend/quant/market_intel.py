@@ -942,7 +942,7 @@ def build_market_intel_summary(
     if selected not in binance_symbols:
         binance_symbols.insert(0, selected)
 
-    lookback_bars = max(24, min(int(lookback_bars), 240))
+    lookback_bars = max(24, min(int(lookback_bars), 1000))
     depth_limit = max(5, min(int(depth_limit), 100))
     interval = _binance_period(interval)
 
