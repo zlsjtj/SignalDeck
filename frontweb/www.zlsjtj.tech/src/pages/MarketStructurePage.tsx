@@ -1267,6 +1267,39 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const topBidShare = totalBid > 0 ? (ob?.bids?.[0]?.notional ?? 0) / totalBid : 0;
   const topAskShare = totalAsk > 0 ? (ob?.asks?.[0]?.notional ?? 0) / totalAsk : 0;
   const depthImbalance = ob?.imbalance ?? 0;
+  const nearBid = (ob?.bids ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
+  const nearAsk = (ob?.asks ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
+  const nearDepth = nearBid + nearAsk;
+  const nearDepthImbalance = nearDepth > 0 ? (nearBid - nearAsk) / nearDepth : 0;
+  const liquidityWalls = useMemo(() => {
+    const mid = ob?.mid ?? 0;
+    const bidWalls = [...(ob?.bids ?? [])]
+      .sort((a, b) => b.notional - a.notional)
+      .slice(0, 4)
+      .map((level, idx) => ({
+        key: `bid-${idx}-${level.price}`,
+        side: 'bid' as const,
+        price: level.price,
+        qty: level.qty,
+        notional: level.notional,
+        share: totalBid > 0 ? level.notional / totalBid : 0,
+        distancePct: mid > 0 ? level.price / mid - 1 : null,
+      }));
+    const askWalls = [...(ob?.asks ?? [])]
+      .sort((a, b) => b.notional - a.notional)
+      .slice(0, 4)
+      .map((level, idx) => ({
+        key: `ask-${idx}-${level.price}`,
+        side: 'ask' as const,
+        price: level.price,
+        qty: level.qty,
+        notional: level.notional,
+        share: totalAsk > 0 ? level.notional / totalAsk : 0,
+        distancePct: mid > 0 ? level.price / mid - 1 : null,
+      }));
+    return [...bidWalls, ...askWalls].sort((a, b) => b.notional - a.notional);
+  }, [ob, totalAsk, totalBid]);
+  const largestWall = liquidityWalls[0];
   const depthChartOption = useMemo(() => {
     const levels = rows.map((row) => String(row.key + 1));
     return {
@@ -1388,6 +1421,18 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             <Col xs={12} md={6}>
               <Statistic title={byLang('价差', 'Spread')} value={formatPercent(ob?.spreadPct ?? 0, 3)} />
             </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('近三档偏斜', 'Top-3 skew')} value={signedPercent(nearDepthImbalance)} valueStyle={{ color: barColor(nearDepthImbalance) }} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('近三档深度', 'Top-3 depth')} value={formatNumber(nearDepth, 0)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最大挂单墙', 'Largest wall')} value={largestWall ? formatNumber(largestWall.notional, 0) : '-'} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('挂单墙距离', 'Wall distance')} value={largestWall?.distancePct == null ? '-' : signedPercent(largestWall.distancePct, 3)} />
+            </Col>
           </Row>
           <div>
             <Space wrap style={{ marginBottom: 6 }}>
@@ -1405,11 +1450,28 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             />
           </div>
           <ReactECharts option={depthChartOption} style={{ height: 280 }} notMerge lazyUpdate />
+          <Table
+            size="small"
+            pagination={false}
+            dataSource={liquidityWalls}
+            columns={[
+              {
+                title: byLang('方向', 'Side'),
+                dataIndex: 'side',
+                render: (side: 'bid' | 'ask') => <Tag color={side === 'bid' ? 'red' : 'blue'}>{side === 'bid' ? byLang('买盘', 'Bid') : byLang('卖盘', 'Ask')}</Tag>,
+              },
+              { title: byLang('价格', 'Price'), dataIndex: 'price', render: (v: number) => formatNumber(v, 2) },
+              { title: byLang('数量', 'Qty'), dataIndex: 'qty', responsive: ['md'], render: (v: number) => formatNumber(v, 4) },
+              { title: byLang('名义额', 'Notional'), dataIndex: 'notional', render: (v: number) => formatNumber(v, 0) },
+              { title: byLang('本侧占比', 'Side share'), dataIndex: 'share', responsive: ['md'], render: (v: number) => formatPercent(v) },
+              { title: byLang('距中间价', 'Distance to mid'), dataIndex: 'distancePct', responsive: ['lg'], render: (v: number | null) => v == null ? '-' : signedPercent(v, 3) },
+            ]}
+          />
           <Table size="small" pagination={false} columns={columns} dataSource={rows} />
           <Typography.Text type="secondary">
             {byLang(
-              '累计深度用于观察挂单墙和深度集中度；订单薄是快照，可能快速变化。',
-              'Cumulative depth helps inspect displayed walls and concentration; the order book is a snapshot and can change quickly.',
+              '累计深度和挂单墙用于观察显示流动性的集中位置；订单薄是快照，可能快速变化。',
+              'Cumulative depth and liquidity walls help locate displayed liquidity concentration; the order book is a snapshot and can change quickly.',
             )}
           </Typography.Text>
         </Space>
