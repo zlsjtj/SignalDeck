@@ -354,6 +354,7 @@ export type MarketIntelVenueSnapshot = {
   binanceSymbol: string;
   ok: boolean;
   error: string;
+  sourceErrors?: string[];
   orderbook: MarketIntelOrderbook | null;
   flow: MarketIntelFlow | null;
   volumeRatio: number;

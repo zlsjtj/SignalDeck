@@ -654,6 +654,10 @@ function VenueCard({
   const flow = venue.flow;
   const deriv = venue.derivatives;
   const stream = venue.stream;
+  const sourceErrors = [
+    ...(venue.sourceErrors ?? []),
+    ...(deriv?.errors ?? []).map((item) => `derivatives: ${item}`),
+  ];
   const ofiSeries = (stream?.ofi?.series ?? []).map((point) => ({
     ts: point.ts,
     value: point.ofiNorm,
@@ -679,6 +683,29 @@ function VenueCard({
     >
       {!venue.ok ? (
         <Alert type="warning" showIcon message={venue.error || byLang('数据源暂不可用', 'Source unavailable')} />
+      ) : null}
+      {venue.ok && sourceErrors.length > 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={byLang('部分市场结构数据暂不可用', 'Some market-structure data is temporarily unavailable')}
+          description={
+            <Space direction="vertical" size={2}>
+              <Typography.Text type="secondary">
+                {byLang(
+                  '已保留可用的盘口、成交、K 线或合约数据；下列来源会在下一次刷新时重试。',
+                  'Available book, trade, kline or futures data is kept; the sources below will retry on the next refresh.',
+                )}
+              </Typography.Text>
+              {sourceErrors.slice(0, 4).map((item, idx) => (
+                <Typography.Text key={`${item}-${idx}`} type="secondary">
+                  {item}
+                </Typography.Text>
+              ))}
+            </Space>
+          }
+        />
       ) : null}
       <Space direction="vertical" size={14} style={{ width: '100%' }}>
         <MetricGroup title={byLang('价格与盘口', 'Price and book')}>

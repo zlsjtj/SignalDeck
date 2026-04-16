@@ -956,6 +956,7 @@ def build_market_intel_summary(
             "binanceSymbol": selected,
             "ok": True,
             "error": "",
+            "sourceErrors": [],
             "orderbook": None,
             "flow": None,
             "volumeRatio": 0.0,
@@ -963,18 +964,36 @@ def build_market_intel_summary(
             "sessionHeatmap": [],
             "derivatives": None,
         }
+
+        source_errors: List[str] = []
         try:
             venue_payload["orderbook"] = _fetch_depth(venue, selected, depth_limit)
+        except Exception as exc:
+            source_errors.append(f"depth: {exc}")
+
+        try:
             venue_payload["flow"] = _fetch_agg_trade_flow(venue, selected)
+        except Exception as exc:
+            source_errors.append(f"aggTrades: {exc}")
+
+        try:
             rows = _fetch_klines(venue, selected, interval, lookback_bars)
             venue_payload["volumeRatio"] = _volume_ratio(rows)
             venue_payload["sessionEffect"] = _session_effect(rows)
             venue_payload["sessionHeatmap"] = _session_heatmap(rows)
-            if venue == "futures":
-                venue_payload["derivatives"] = _fetch_futures_derivatives(selected, interval)
         except Exception as exc:
+            source_errors.append(f"klines: {exc}")
+
+        if venue == "futures":
+            try:
+                venue_payload["derivatives"] = _fetch_futures_derivatives(selected, interval)
+            except Exception as exc:
+                source_errors.append(f"derivatives: {exc}")
+
+        venue_payload["sourceErrors"] = source_errors
+        if source_errors and not venue_payload["orderbook"] and not venue_payload["flow"] and not venue_payload["sessionEffect"]:
             venue_payload["ok"] = False
-            venue_payload["error"] = str(exc)
+            venue_payload["error"] = "; ".join(source_errors[:3])
         venues[venue] = venue_payload
 
     for symbol in binance_symbols[:8]:
