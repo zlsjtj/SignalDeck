@@ -848,6 +848,12 @@ function MetricGroup({ title, children }: { title: string; children: ReactNode }
   );
 }
 
+function directionScore(direction: PressureDirection) {
+  if (direction === 'buy') return 1;
+  if (direction === 'sell') return -1;
+  return 0;
+}
+
 function MicrostructureFocusPanel({
   venue,
   secondaryVenue,
@@ -870,6 +876,48 @@ function MicrostructureFocusPanel({
   const bookDirection = pressureDirection(book?.imbalance);
   const divergence = [primaryFlowDirection, liveFlowDirection, ofiDirection, bookDirection].filter((item) => item === 'buy' || item === 'sell');
   const hasDivergence = divergence.includes('buy') && divergence.includes('sell');
+  const alignmentScore = directionScore(primaryFlowDirection) + directionScore(liveFlowDirection) + directionScore(ofiDirection) + directionScore(bookDirection);
+  const signalQuality = Math.min(1, ((streamFlow?.samples ?? 0) + (ofi?.samples ?? 0)) / 200);
+  const flowNotional = (flow?.buyNotional ?? 0) + (flow?.sellNotional ?? 0);
+  const liveNotional = (streamFlow?.buyNotional ?? 0) + (streamFlow?.sellNotional ?? 0);
+  const diagnosticRows = [
+    {
+      key: 'rest-flow',
+      metric: byLang('REST 主动成交', 'REST taker flow'),
+      current: flow ? signedPercent(flow.tradeImbalance) : '-',
+      sample: flow ? byLang(`${flow.tradeCount} 笔`, `${flow.tradeCount} trades`) : '-',
+      notional: flow ? formatNumber(flowNotional, 0) : '-',
+      freshness: flow?.latestTs ? formatTs(flow.latestTs) : '-',
+      role: byLang('最近聚合成交方向', 'Recent aggregated trade direction'),
+    },
+    {
+      key: 'live-flow',
+      metric: byLang('实时主动成交', 'Live taker flow'),
+      current: streamFlow ? signedPercent(streamFlow.imbalance) : '-',
+      sample: streamFlow ? streamFlow.samples : '-',
+      notional: streamFlow ? formatNumber(liveNotional, 0) : '-',
+      freshness: streamFlow?.latestTs ? formatTs(streamFlow.latestTs) : '-',
+      role: byLang('当前窗口主动成交方向', 'Current-window aggressive flow'),
+    },
+    {
+      key: 'ofi',
+      metric: 'OFI',
+      current: ofi ? signedPercent(ofi.ofiNorm) : '-',
+      sample: ofi ? ofi.samples : '-',
+      notional: ofi ? formatNumber(ofi.ofi, 0) : '-',
+      freshness: ofi?.latestTs ? formatTs(ofi.latestTs) : '-',
+      role: byLang('订单薄更新压力', 'Book-update pressure'),
+    },
+    {
+      key: 'level2',
+      metric: 'Level 2',
+      current: book ? signedPercent(book.imbalance) : '-',
+      sample: book ? (book.bids.length + book.asks.length) : '-',
+      notional: book ? formatNumber((book.bidNotional ?? 0) + (book.askNotional ?? 0), 0) : '-',
+      freshness: venue?.stream?.orderbook?.lastUpdateId ? String(venue.stream.orderbook.lastUpdateId) : byLang('快照', 'snapshot'),
+      role: byLang('静态显示深度', 'Displayed depth snapshot'),
+    },
+  ];
   const option = useMemo(() => {
     const takerValues = new Map(liveFlowSeries.map((point) => [point.ts, point.takerBuyRatio]));
     const flowImbalanceValues = new Map(liveFlowSeries.map((point) => [point.ts, point.imbalance]));
@@ -954,6 +1002,18 @@ function MicrostructureFocusPanel({
           <Col xs={12} md={6}>
             <Statistic title={byLang('Level 2 偏斜', 'Level 2 skew')} value={signedPercent(book?.imbalance)} valueStyle={{ color: barColor(book?.imbalance ?? 0) }} />
           </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('一致性分数', 'Alignment score')} value={`${alignmentScore > 0 ? '+' : ''}${alignmentScore}/4`} valueStyle={{ color: alignmentScore > 0 ? '#ff4d4f' : alignmentScore < 0 ? '#1677ff' : undefined }} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('样本质量', 'Sample quality')} value={formatPercent(signalQuality)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时成交流名义额', 'Live flow notional')} value={formatNumber(liveNotional, 0)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('REST 成交流名义额', 'REST flow notional')} value={formatNumber(flowNotional, 0)} />
+          </Col>
         </Row>
         <Space wrap>
           <Typography.Text type="secondary">{byLang('方向检查', 'Direction check')}:</Typography.Text>
@@ -969,6 +1029,19 @@ function MicrostructureFocusPanel({
         ) : (
           <ReactECharts option={option} style={{ height: 286 }} notMerge lazyUpdate />
         )}
+        <Table
+          size="small"
+          pagination={false}
+          dataSource={diagnosticRows}
+          columns={[
+            { title: byLang('指标', 'Metric'), dataIndex: 'metric' },
+            { title: byLang('当前', 'Current'), dataIndex: 'current' },
+            { title: byLang('样本', 'Samples'), dataIndex: 'sample', responsive: ['md'] },
+            { title: byLang('名义额 / 原始值', 'Notional / raw'), dataIndex: 'notional', responsive: ['md'] },
+            { title: byLang('新鲜度', 'Freshness'), dataIndex: 'freshness', responsive: ['lg'] },
+            { title: byLang('用途', 'Role'), dataIndex: 'role', responsive: ['lg'] },
+          ]}
+        />
         <Typography.Text type="secondary">
           {byLang(
             'Taker buy 在图中减去 50% 后展示，便于和 Flow skew、OFI 在同一坐标比较；这些是监测指标，不是交易建议。',
@@ -1194,6 +1267,51 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const topBidShare = totalBid > 0 ? (ob?.bids?.[0]?.notional ?? 0) / totalBid : 0;
   const topAskShare = totalAsk > 0 ? (ob?.asks?.[0]?.notional ?? 0) / totalAsk : 0;
   const depthImbalance = ob?.imbalance ?? 0;
+  const depthChartOption = useMemo(() => {
+    const levels = rows.map((row) => String(row.key + 1));
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          const items = Array.isArray(params) ? params : [params];
+          const level = String(items[0]?.axisValue ?? '');
+          const lines = items.map((item) => `${item.seriesName}: ${formatNumber(Math.abs(Number(item.data ?? 0)), 0)}`);
+          return `${byLang('档位', 'Level')} ${level}<br/>${lines.join('<br/>')}`;
+        },
+      },
+      legend: { top: 0, textStyle: { color: 'rgba(215,226,240,0.72)' } },
+      grid: { left: 54, right: 18, top: 36, bottom: 34 },
+      xAxis: {
+        type: 'category',
+        data: levels,
+        axisLabel: { color: 'rgba(215,226,240,0.72)' },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.14)' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: 'rgba(215,226,240,0.72)', formatter: (v: number) => formatNumber(Math.abs(v), 0) },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } },
+      },
+      series: [
+        {
+          name: byLang('累计买盘', 'Cumulative bid'),
+          type: 'bar',
+          stack: 'depth',
+          data: rows.map((row) => row.bidCumulative),
+          itemStyle: { color: '#ff4d4f' },
+        },
+        {
+          name: byLang('累计卖盘', 'Cumulative ask'),
+          type: 'bar',
+          stack: 'depth',
+          data: rows.map((row) => -row.askCumulative),
+          itemStyle: { color: '#1677ff' },
+        },
+      ],
+    };
+  }, [rows]);
 
   const columns: ColumnsType<{ key: number; bid?: MarketIntelLevel; ask?: MarketIntelLevel; bidCumulative: number; askCumulative: number }> = [
     {
@@ -1286,6 +1404,7 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
               showInfo={false}
             />
           </div>
+          <ReactECharts option={depthChartOption} style={{ height: 280 }} notMerge lazyUpdate />
           <Table size="small" pagination={false} columns={columns} dataSource={rows} />
           <Typography.Text type="secondary">
             {byLang(
