@@ -100,6 +100,16 @@ function coverageText(seconds?: number, targetSeconds?: number) {
   return text;
 }
 
+function freshnessText(ts?: string) {
+  if (!ts) return byLang('等待样本', 'Waiting for samples');
+  const parsed = Date.parse(ts);
+  if (!Number.isFinite(parsed)) return '-';
+  const seconds = Math.max(0, Math.round((Date.now() - parsed) / 1000));
+  return seconds < 60
+    ? byLang(`${seconds} 秒前`, `${seconds}s ago`)
+    : byLang(`${Math.round(seconds / 60)} 分钟前`, `${Math.round(seconds / 60)}m ago`);
+}
+
 function metricLabel(metric: PressureMetric) {
   if (metric === 'book') return byLang('订单薄', 'Book');
   if (metric === 'flow') return byLang('成交流', 'Flow');
@@ -880,6 +890,19 @@ function MicrostructureFocusPanel({
   const signalQuality = Math.min(1, ((streamFlow?.samples ?? 0) + (ofi?.samples ?? 0)) / 200);
   const flowNotional = (flow?.buyNotional ?? 0) + (flow?.sellNotional ?? 0);
   const liveNotional = (streamFlow?.buyNotional ?? 0) + (streamFlow?.sellNotional ?? 0);
+  const coverageSeconds = Math.max(streamFlow?.availableSeconds ?? 0, ofi?.availableSeconds ?? 0);
+  const coverageRatio = Math.min(1, coverageSeconds / streamWindowSeconds);
+  const restLiveGap = flow && streamFlow ? (streamFlow.takerBuyRatio - flow.takerBuyRatio) : null;
+  const flowOfiGap = streamFlow && ofi ? (streamFlow.imbalance - ofi.ofiNorm) : null;
+  const latestLiveTs = [streamFlow?.latestTs, ofi?.latestTs].filter(Boolean).sort().at(-1);
+  const liveFreshnessMs = latestLiveTs ? Date.parse(latestLiveTs) : Number.NaN;
+  const liveFreshnessSeconds = Number.isFinite(liveFreshnessMs) ? Math.max(0, Math.round((Date.now() - liveFreshnessMs) / 1000)) : null;
+  const qualityWarnings = [
+    coverageRatio < 0.5 ? byLang('实时窗口覆盖不足 50%，刚启动或重连后应降低解读权重。', 'Live window coverage is below 50%; reduce weight right after startup or reconnect.') : '',
+    liveFreshnessSeconds != null && liveFreshnessSeconds > 30 ? byLang('最新实时样本超过 30 秒未更新，请同时查看采集器状态。', 'Latest live sample is older than 30s; also check collector status.') : '',
+    restLiveGap != null && Math.abs(restLiveGap) >= PRESSURE_THRESHOLD ? byLang('REST 与 Live Taker ratio 差异较大，说明短窗流向和最近聚合成交不一致。', 'REST and Live taker ratio differ materially, so short-window flow and recent aggregated trades disagree.') : '',
+    flowOfiGap != null && Math.abs(flowOfiGap) >= PRESSURE_THRESHOLD ? byLang('实时成交流与 OFI 差异较大，主动成交和订单薄更新压力不一致。', 'Live flow and OFI differ materially, so aggressive trades and book-update pressure disagree.') : '',
+  ].filter(Boolean);
   const diagnosticRows = [
     {
       key: 'rest-flow',
@@ -896,7 +919,7 @@ function MicrostructureFocusPanel({
       current: streamFlow ? signedPercent(streamFlow.imbalance) : '-',
       sample: streamFlow ? streamFlow.samples : '-',
       notional: streamFlow ? formatNumber(liveNotional, 0) : '-',
-      freshness: streamFlow?.latestTs ? formatTs(streamFlow.latestTs) : '-',
+      freshness: streamFlow?.latestTs ? freshnessText(streamFlow.latestTs) : '-',
       role: byLang('当前窗口主动成交方向', 'Current-window aggressive flow'),
     },
     {
@@ -905,7 +928,7 @@ function MicrostructureFocusPanel({
       current: ofi ? signedPercent(ofi.ofiNorm) : '-',
       sample: ofi ? ofi.samples : '-',
       notional: ofi ? formatNumber(ofi.ofi, 0) : '-',
-      freshness: ofi?.latestTs ? formatTs(ofi.latestTs) : '-',
+      freshness: ofi?.latestTs ? freshnessText(ofi.latestTs) : '-',
       role: byLang('订单薄更新压力', 'Book-update pressure'),
     },
     {
@@ -916,6 +939,24 @@ function MicrostructureFocusPanel({
       notional: book ? formatNumber((book.bidNotional ?? 0) + (book.askNotional ?? 0), 0) : '-',
       freshness: venue?.stream?.orderbook?.lastUpdateId ? String(venue.stream.orderbook.lastUpdateId) : byLang('快照', 'snapshot'),
       role: byLang('静态显示深度', 'Displayed depth snapshot'),
+    },
+    {
+      key: 'rest-live-gap',
+      metric: byLang('REST / Live 差异', 'REST / Live gap'),
+      current: restLiveGap == null ? '-' : signedPercent(restLiveGap),
+      sample: byLang('Taker buy 差值', 'Taker buy delta'),
+      notional: '-',
+      freshness: latestLiveTs ? freshnessText(latestLiveTs) : '-',
+      role: byLang('检查最近聚合成交与实时短窗是否一致', 'Checks whether recent aggregated trades agree with the live short window'),
+    },
+    {
+      key: 'flow-ofi-gap',
+      metric: byLang('Flow / OFI 差异', 'Flow / OFI gap'),
+      current: flowOfiGap == null ? '-' : signedPercent(flowOfiGap),
+      sample: byLang('偏斜差值', 'Skew delta'),
+      notional: '-',
+      freshness: latestLiveTs ? freshnessText(latestLiveTs) : '-',
+      role: byLang('检查主动成交压力与订单薄更新压力是否背离', 'Checks whether aggressive flow diverges from book-update pressure'),
     },
   ];
   const option = useMemo(() => {
@@ -981,13 +1022,22 @@ function MicrostructureFocusPanel({
     <Card title={byLang('Taker ratio / OFI 核心监控', 'Taker ratio / OFI core monitor')}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Alert
-          type={hasDivergence ? 'warning' : 'info'}
+          type={hasDivergence || qualityWarnings.length > 0 ? 'warning' : 'info'}
           showIcon
           message={hasDivergence ? byLang('成交与订单薄压力出现背离', 'Trade flow and book pressure are diverging') : byLang('成交与订单薄压力未出现明显背离', 'No clear divergence between trade flow and book pressure')}
-          description={byLang(
-            'Taker ratio 看主动成交方向，OFI 看订单薄更新压力，Level 2 偏斜看静态深度；三者一起用于观察短窗微观结构。',
-            'Taker ratio tracks aggressive trade direction, OFI tracks book-update pressure, and Level 2 skew tracks displayed depth; together they monitor short-window microstructure.',
-          )}
+          description={
+            <Space direction="vertical" size={2}>
+              <Typography.Text type="secondary">
+                {byLang(
+                  'Taker ratio 看主动成交方向，OFI 看订单薄更新压力，Level 2 偏斜看静态深度；三者一起用于观察短窗微观结构。',
+                  'Taker ratio tracks aggressive trade direction, OFI tracks book-update pressure, and Level 2 skew tracks displayed depth; together they monitor short-window microstructure.',
+                )}
+              </Typography.Text>
+              {qualityWarnings.map((item) => (
+                <Typography.Text key={item} type="secondary">{item}</Typography.Text>
+              ))}
+            </Space>
+          }
         />
         <Row gutter={[12, 12]}>
           <Col xs={12} md={6}>
@@ -1007,6 +1057,18 @@ function MicrostructureFocusPanel({
           </Col>
           <Col xs={12} md={6}>
             <Statistic title={byLang('样本质量', 'Sample quality')} value={formatPercent(signalQuality)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('窗口覆盖', 'Window coverage')} value={formatPercent(coverageRatio)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时新鲜度', 'Live freshness')} value={latestLiveTs ? freshnessText(latestLiveTs) : '-'} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('REST / Live 差异', 'REST / Live gap')} value={restLiveGap == null ? '-' : signedPercent(restLiveGap)} valueStyle={{ color: restLiveGap == null ? undefined : barColor(restLiveGap) }} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('Flow / OFI 差异', 'Flow / OFI gap')} value={flowOfiGap == null ? '-' : signedPercent(flowOfiGap)} valueStyle={{ color: flowOfiGap == null ? undefined : barColor(flowOfiGap) }} />
           </Col>
           <Col xs={12} md={6}>
             <Statistic title={byLang('实时成交流名义额', 'Live flow notional')} value={formatNumber(liveNotional, 0)} />
