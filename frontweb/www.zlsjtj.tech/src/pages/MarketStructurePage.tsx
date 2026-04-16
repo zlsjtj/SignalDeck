@@ -30,6 +30,7 @@ type MiniChartPoint = {
 };
 
 type PressureMetric = 'book' | 'flow' | 'ofi';
+type PressureDirection = 'buy' | 'sell' | 'balanced' | 'unknown';
 type SessionTimezone = 'utc' | 'asia-shanghai';
 type OiPeriod = '15m' | '30m' | '1h' | '4h' | '1d';
 
@@ -70,6 +71,20 @@ function pressureTagColor(value?: number | null) {
   if (v >= PRESSURE_THRESHOLD) return 'red';
   if (v <= -PRESSURE_THRESHOLD) return 'blue';
   return 'green';
+}
+
+function pressureDirection(value?: number | null): PressureDirection {
+  if (value === null || value === undefined || Number.isNaN(value)) return 'unknown';
+  if (value >= PRESSURE_THRESHOLD) return 'buy';
+  if (value <= -PRESSURE_THRESHOLD) return 'sell';
+  return 'balanced';
+}
+
+function directionTag(direction: PressureDirection) {
+  if (direction === 'buy') return <Tag color="red">{byLang('买方压力', 'Buy pressure')}</Tag>;
+  if (direction === 'sell') return <Tag color="blue">{byLang('卖方压力', 'Sell pressure')}</Tag>;
+  if (direction === 'balanced') return <Tag color="green">{byLang('相对均衡', 'Balanced')}</Tag>;
+  return <Tag>{byLang('等待数据', 'Waiting')}</Tag>;
 }
 
 function coverageText(seconds?: number, targetSeconds?: number) {
@@ -556,6 +571,190 @@ function MarketContextPanel({
             </Tag>
           ))
         )}
+      </Space>
+    </Card>
+  );
+}
+
+function StructureInsightPanel({
+  selectedVenue,
+  secondaryVenue,
+  basis,
+  stream,
+  liquidationRows,
+  correlationBreaks,
+  streamWindowSeconds,
+}: {
+  selectedVenue?: MarketIntelVenueSnapshot;
+  secondaryVenue?: MarketIntelVenueSnapshot;
+  basis?: MarketIntelBasis;
+  stream?: MarketIntelStreamStatus;
+  liquidationRows: MarketIntelLiquidation[];
+  correlationBreaks?: MarketIntelSummary['correlation']['breaks'];
+  streamWindowSeconds: StreamWindowSeconds;
+}) {
+  const bookDirection = pressureDirection(selectedVenue?.orderbook?.imbalance);
+  const flowDirection = pressureDirection(selectedVenue?.flow?.tradeImbalance);
+  const ofiDirection = pressureDirection(selectedVenue?.stream?.ofi?.ofiNorm);
+  const directions = [bookDirection, flowDirection, ofiDirection].filter((item) => item !== 'unknown');
+  const buyCount = directions.filter((item) => item === 'buy').length;
+  const sellCount = directions.filter((item) => item === 'sell').length;
+  const liveSamples = (selectedVenue?.stream?.ofi?.samples ?? 0) + (selectedVenue?.stream?.flow?.samples ?? 0);
+  const secondaryFlow = secondaryVenue?.flow?.tradeImbalance;
+  const oiChange = selectedVenue?.derivatives?.openInterestChangePct;
+  const fundingRate = selectedVenue?.derivatives?.fundingRate;
+  const basisPct = basis?.basisPct;
+  const hasDivergence = buyCount > 0 && sellCount > 0;
+  const alignedDirection: PressureDirection = buyCount >= 2 ? 'buy' : sellCount >= 2 ? 'sell' : directions.length > 0 ? 'balanced' : 'unknown';
+  const headline = hasDivergence
+    ? byLang('短窗指标出现背离', 'Short-window indicators are diverging')
+    : alignedDirection === 'buy'
+      ? byLang('短窗买方压力较集中', 'Short-window buy pressure is concentrated')
+      : alignedDirection === 'sell'
+        ? byLang('短窗卖方压力较集中', 'Short-window sell pressure is concentrated')
+        : alignedDirection === 'balanced'
+          ? byLang('短窗结构相对均衡', 'Short-window structure is relatively balanced')
+          : byLang('等待实时结构样本', 'Waiting for live structure samples');
+  const streamUpdatedMs = stream?.updatedAt ? Date.parse(stream.updatedAt) : Number.NaN;
+  const streamAgeSeconds = Number.isFinite(streamUpdatedMs) ? Math.max(0, Math.round((Date.now() - streamUpdatedMs) / 1000)) : null;
+  const streamState = stream?.status === 'running'
+    ? byLang('实时流运行中', 'Live stream running')
+    : byLang('实时流未运行', 'Live stream not running');
+
+  return (
+    <Card
+      size="small"
+      title={byLang('结构摘要', 'Structure brief')}
+      extra={<Tag color={alignedDirection === 'buy' ? 'red' : alignedDirection === 'sell' ? 'blue' : 'green'}>{headline}</Tag>}
+    >
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Row gutter={[12, 12]}>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('Book / Flow / OFI 一致性', 'Book / Flow / OFI alignment')} value={`${Math.max(buyCount, sellCount)}/3`} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时样本', 'Live samples')} value={liveSamples} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('最近爆仓记录', 'Recent liquidations')} value={liquidationRows.length} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('相关性提示', 'Correlation monitors')} value={correlationBreaks?.length ?? 0} />
+          </Col>
+        </Row>
+        <Space wrap>
+          <Typography.Text type="secondary">{byLang('主视角', 'Primary')}:</Typography.Text>
+          {directionTag(alignedDirection)}
+          <Tag>{byLang('窗口', 'Window')}: {streamWindowSeconds / 60}m</Tag>
+          <Tag color={stream?.status === 'running' ? 'green' : 'gold'}>{streamState}</Tag>
+          <Tag>{byLang('更新延迟', 'Update lag')}: {streamAgeSeconds == null ? '-' : `${streamAgeSeconds}s`}</Tag>
+          <Tag>{byLang('辅助视角成交流', 'Secondary flow')}: {signedPercent(secondaryFlow)}</Tag>
+          <Tag>{byLang('OI', 'OI')}: {signedPercent(oiChange, 3)}</Tag>
+          <Tag>{byLang('Funding', 'Funding')}: {fundingRate == null ? '-' : formatPercent(fundingRate, 4)}</Tag>
+          <Tag>{byLang('Basis', 'Basis')}: {signedPercent(basisPct, 3)}</Tag>
+        </Space>
+        <Typography.Text type="secondary">
+          {byLang(
+            '结构摘要把盘口、主动成交、OFI、合约持仓、期现价差和事件流放在同一处对齐；它用于监测一致性和背离，不构成交易建议。',
+            'The brief aligns book, taker flow, OFI, positioning, basis and event flow in one place; it monitors agreement and divergence and is not trading advice.',
+          )}
+        </Typography.Text>
+      </Space>
+    </Card>
+  );
+}
+
+function StructureConsistencyPanel({
+  selectedVenue,
+  secondaryVenue,
+  basis,
+}: {
+  selectedVenue?: MarketIntelVenueSnapshot;
+  secondaryVenue?: MarketIntelVenueSnapshot;
+  basis?: MarketIntelBasis;
+}) {
+  const rows = [
+    {
+      key: 'book',
+      metric: byLang('订单薄偏斜', 'Book skew'),
+      value: signedPercent(selectedVenue?.orderbook?.imbalance),
+      direction: pressureDirection(selectedVenue?.orderbook?.imbalance),
+      role: byLang('挂单厚度压力', 'Displayed-depth pressure'),
+    },
+    {
+      key: 'flow',
+      metric: byLang('主视角成交流', 'Primary taker flow'),
+      value: signedPercent(selectedVenue?.flow?.tradeImbalance),
+      direction: pressureDirection(selectedVenue?.flow?.tradeImbalance),
+      role: byLang('主动成交压力', 'Aggressive-trade pressure'),
+    },
+    {
+      key: 'ofi',
+      metric: 'OFI',
+      value: signedPercent(selectedVenue?.stream?.ofi?.ofiNorm),
+      direction: pressureDirection(selectedVenue?.stream?.ofi?.ofiNorm),
+      role: byLang('订单薄更新压力', 'Book-update pressure'),
+    },
+    {
+      key: 'secondary-flow',
+      metric: byLang('辅助视角成交流', 'Secondary taker flow'),
+      value: signedPercent(secondaryVenue?.flow?.tradeImbalance),
+      direction: pressureDirection(secondaryVenue?.flow?.tradeImbalance),
+      role: byLang('Spot/Futures 交叉检查', 'Spot/Futures cross-check'),
+    },
+    {
+      key: 'oi',
+      metric: byLang('持仓量变化', 'OI change'),
+      value: signedPercent(selectedVenue?.derivatives?.openInterestChangePct, 3),
+      direction: pressureDirection(selectedVenue?.derivatives?.openInterestChangePct),
+      role: byLang('合约仓位规模变化', 'Positioning size change'),
+    },
+    {
+      key: 'basis',
+      metric: byLang('期现价差', 'Basis'),
+      value: signedPercent(basis?.basisPct, 3),
+      direction: pressureDirection(basis?.basisPct),
+      role: byLang('期现结构变化', 'Spot-futures structure change'),
+    },
+  ];
+  const pressureRows = rows.filter((row) => row.direction === 'buy' || row.direction === 'sell');
+  const buyCount = pressureRows.filter((row) => row.direction === 'buy').length;
+  const sellCount = pressureRows.filter((row) => row.direction === 'sell').length;
+  const hasDivergence = buyCount > 0 && sellCount > 0;
+
+  return (
+    <Card title={byLang('一致性与背离监控', 'Alignment and divergence monitor')}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type={hasDivergence ? 'warning' : 'info'}
+          showIcon
+          message={hasDivergence ? byLang('部分结构指标方向不一致', 'Some structure indicators disagree') : byLang('未检测到明显方向背离', 'No clear directional divergence detected')}
+          description={byLang(
+            '方向只基于当前阈值和最新窗口，用于发现需要进一步查看的结构变化。',
+            'Direction only uses current thresholds and the latest window to surface structure changes worth reviewing.',
+          )}
+        />
+        <Table
+          size="small"
+          pagination={false}
+          dataSource={rows}
+          columns={[
+            { title: byLang('指标', 'Metric'), dataIndex: 'metric' },
+            { title: byLang('当前值', 'Current'), dataIndex: 'value' },
+            {
+              title: byLang('方向', 'Direction'),
+              dataIndex: 'direction',
+              render: (direction: PressureDirection) => directionTag(direction),
+            },
+            { title: byLang('作用', 'Role'), dataIndex: 'role', responsive: ['md'] },
+          ]}
+        />
+        <Typography.Text type="secondary">
+          {byLang(
+            'OI 和 Basis 的方向不能直接等同多空，只作为合约结构和期现结构的背景项。',
+            'OI and Basis direction is not a direct long/short call; it is used as positioning and basis context.',
+          )}
+        </Typography.Text>
       </Space>
     </Card>
   );
@@ -1296,10 +1495,30 @@ function StreamObservability({ stream }: { stream?: MarketIntelStreamStatus }) {
     ...conn,
   }));
   const errorRows = (stream?.errors ?? []).slice(0, 6).map((row, idx) => ({ ...row, key: `${row.ts}-${idx}` }));
+  const openConnections = connectionRows.filter((row) => row.status === 'open').length;
+  const errorConnections = connectionRows.filter((row) => row.status === 'error').length;
+  const updatedMs = stream?.updatedAt ? Date.parse(stream.updatedAt) : Number.NaN;
+  const updateLagSeconds = Number.isFinite(updatedMs) ? Math.max(0, Math.round((Date.now() - updatedMs) / 1000)) : null;
+  const isStale = updateLagSeconds != null && updateLagSeconds > 180;
+  const runtimeType = errorConnections > 0 || stream?.status === 'stopped' || isStale ? 'warning' : 'info';
+  const runtimeMessage = errorConnections > 0
+    ? byLang('部分实时连接异常', 'Some live connections have errors')
+    : stream?.status === 'running' && openConnections > 0
+      ? byLang('实时采集器运行中', 'Live collector is running')
+      : byLang('等待实时采集器连接', 'Waiting for live collector connections');
 
   return (
     <Card title={byLang('采集器状态', 'Collector status')}>
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Alert
+          type={runtimeType}
+          showIcon
+          message={runtimeMessage}
+          description={byLang(
+            '正常空状态、样本积累、REST 局部失败和 WebSocket 连接错误分开显示，避免把无爆仓或刚启动误判为故障。',
+            'Normal empty states, sample accumulation, partial REST failures and WebSocket connection errors are shown separately so no-liquidation or startup states are not treated as faults.',
+          )}
+        />
         <Row gutter={[12, 12]}>
           <Col xs={12} md={6}>
             <Statistic title={byLang('实时流', 'Stream')} value={stream?.status ?? 'stopped'} />
@@ -1307,11 +1526,23 @@ function StreamObservability({ stream }: { stream?: MarketIntelStreamStatus }) {
           <Col xs={12} md={6}>
             <Statistic title={byLang('订阅流数量', 'Subscribed streams')} value={connectionRows.reduce((sum, row) => sum + (row.streams ?? 0), 0)} />
           </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('打开连接', 'Open connections')} value={openConnections} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('错误连接', 'Error connections')} value={errorConnections} />
+          </Col>
           <Col xs={24} md={6}>
             <Statistic title={byLang('启动时间', 'Started')} value={stream?.startedAt ? formatTs(stream.startedAt) : '-'} />
           </Col>
           <Col xs={24} md={6}>
             <Statistic title={byLang('最近更新', 'Updated')} value={stream?.updatedAt ? formatTs(stream.updatedAt) : '-'} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('更新延迟', 'Update lag')} value={updateLagSeconds == null ? '-' : `${updateLagSeconds}s`} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('最近错误数', 'Recent errors')} value={errorRows.length} />
           </Col>
         </Row>
         <Table
@@ -1348,6 +1579,96 @@ function StreamObservability({ stream }: { stream?: MarketIntelStreamStatus }) {
         )}
       </Space>
     </Card>
+  );
+}
+
+function ExternalFeedGuide() {
+  const newsRows = [
+    {
+      key: 'news-source',
+      step: byLang('选择真实来源', 'Choose real sources'),
+      detail: byLang('RSS、交易所公告、研究摘要或你自己的本地新闻 feed；每条必须带 source、url、publishedAt。', 'RSS, exchange announcements, research summaries or your own local news feed; each row needs source, url and publishedAt.'),
+    },
+    {
+      key: 'news-normalize',
+      step: byLang('先标准化再打分', 'Normalize before scoring'),
+      detail: byLang('后端先保存标题、摘要、来源、时间和去重键，再调用 NLP；模型输出只能标为情绪估计。', 'Backend stores title, summary, source, time and dedupe key first, then calls NLP; model output is only a sentiment estimate.'),
+    },
+    {
+      key: 'news-display',
+      step: byLang('前端显示来源和时间', 'Show source and time'),
+      detail: byLang('列表展示新闻来源、发布时间、相关资产、情绪分数和置信度；不要把情绪当成事实或交易信号。', 'List source, publish time, related assets, sentiment score and confidence; do not treat sentiment as fact or a trading signal.'),
+    },
+  ];
+  const onchainRows = [
+    {
+      key: 'chain-source',
+      step: byLang('接入聚合源或节点', 'Use an aggregator or node'),
+      detail: byLang('可用链上 API、索引器或自建节点；密钥只放服务器环境变量或密钥文件，不进入 GitHub。', 'Use on-chain APIs, indexers or a self-hosted node; keys stay in server environment variables or secret files and never enter GitHub.'),
+    },
+    {
+      key: 'chain-aggregate',
+      step: byLang('存轻量聚合', 'Store light aggregates'),
+      detail: byLang('优先保存小时级或 5 分钟级聚合，例如交易所净流入、稳定币流量、活跃地址、gas；不默认写入高频原始事件。', 'Prefer hourly or 5-minute aggregates such as exchange netflow, stablecoin flow, active addresses and gas; do not write high-frequency raw events by default.'),
+    },
+    {
+      key: 'chain-quality',
+      step: byLang('标明覆盖范围', 'Mark coverage'),
+      detail: byLang('每个指标显示 chain、asset、source、updatedAt 和缺失原因，避免把未覆盖链误解为零值。', 'Every metric should show chain, asset, source, updatedAt and missing-data reason so uncovered chains are not confused with zero values.'),
+    },
+  ];
+
+  return (
+    <Row gutter={[16, 16]}>
+      <Col xs={24} lg={12}>
+        <Card title={byLang('新闻 NLP / 情绪接入', 'News NLP / sentiment integration')}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message={byLang('当前未配置新闻源', 'No news source configured')}
+              description={byLang(
+                '接入前保持 source_not_configured；配置真实 RSS 或本地 feed 后再展示新闻和模型情绪。',
+                'Keep source_not_configured before integration; show news and model sentiment only after a real RSS or local feed is configured.',
+              )}
+            />
+            <Table
+              size="small"
+              pagination={false}
+              dataSource={newsRows}
+              columns={[
+                { title: byLang('步骤', 'Step'), dataIndex: 'step' },
+                { title: byLang('要求', 'Requirement'), dataIndex: 'detail' },
+              ]}
+            />
+          </Space>
+        </Card>
+      </Col>
+      <Col xs={24} lg={12}>
+        <Card title={byLang('链上数据接入', 'On-chain data integration')}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message={byLang('当前未配置链上数据源', 'No on-chain source configured')}
+              description={byLang(
+                '先接入真实 provider 或节点，再展示聚合指标；未覆盖的链和资产必须显示未配置或数据不足。',
+                'Integrate a real provider or node before showing aggregates; uncovered chains and assets must show not configured or insufficient data.',
+              )}
+            />
+            <Table
+              size="small"
+              pagination={false}
+              dataSource={onchainRows}
+              columns={[
+                { title: byLang('步骤', 'Step'), dataIndex: 'step' },
+                { title: byLang('要求', 'Requirement'), dataIndex: 'detail' },
+              ]}
+            />
+          </Space>
+        </Card>
+      </Col>
+    </Row>
   );
 }
 
@@ -1594,6 +1915,16 @@ export function MarketStructurePage() {
         onRefresh={() => void query.refetch()}
       />
 
+      <StructureInsightPanel
+        selectedVenue={selectedVenue}
+        secondaryVenue={secondaryVenue}
+        basis={data?.basis}
+        stream={data?.stream}
+        liquidationRows={liquidationRows}
+        correlationBreaks={data?.correlation.breaks}
+        streamWindowSeconds={streamWindowSeconds}
+      />
+
       <MetricDirectory
         selectedVenue={selectedVenue}
         liquidationCount={liquidationRows.length}
@@ -1606,6 +1937,12 @@ export function MarketStructurePage() {
         basis={data?.basis}
         liquidationCount={liquidationRows.length}
         rollingCount={data?.correlation.rolling?.length ?? 0}
+      />
+
+      <StructureConsistencyPanel
+        selectedVenue={selectedVenue}
+        secondaryVenue={secondaryVenue}
+        basis={data?.basis}
       />
 
       <MarketSection
@@ -1718,22 +2055,7 @@ export function MarketStructurePage() {
         )}
       >
         <StreamObservability stream={data?.stream} />
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={12}>
-            <Card title={byLang('新闻 NLP / 情绪', 'News NLP / sentiment')}>
-              <Typography.Text type="secondary">
-                {byLang('新闻情绪需要先配置新闻源或本地 NLP feed；当前未接入。', 'News sentiment needs a news source or local NLP feed; none is configured yet.')}
-              </Typography.Text>
-            </Card>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Card title={byLang('链上数据', 'On-chain data')}>
-              <Typography.Text type="secondary">
-                {byLang('链上数据源尚未配置；接入前不会展示模拟数据。', 'On-chain sources are not configured; no simulated data is shown before integration.')}
-              </Typography.Text>
-            </Card>
-          </Col>
-        </Row>
+        <ExternalFeedGuide />
       </MarketSection>
     </div>
   );
