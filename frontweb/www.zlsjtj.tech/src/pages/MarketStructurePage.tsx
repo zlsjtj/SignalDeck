@@ -111,8 +111,19 @@ function freshnessText(ts?: string) {
     : byLang(`${Math.round(seconds / 60)} 分钟前`, `${Math.round(seconds / 60)}m ago`);
 }
 
+function ageSeconds(ts?: string) {
+  if (!ts) return null;
+  const parsed = Date.parse(ts);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.round((Date.now() - parsed) / 1000));
+}
+
+function orderbookTimestamp(book?: MarketIntelOrderbook | null, streamBook?: MarketIntelOrderbook) {
+  return streamBook?.fetchedAt || streamBook?.ts || book?.fetchedAt || book?.ts;
+}
+
 function orderbookFreshnessText(book?: MarketIntelOrderbook | null, streamBook?: MarketIntelOrderbook) {
-  const ts = streamBook?.fetchedAt || streamBook?.ts || book?.fetchedAt || book?.ts;
+  const ts = orderbookTimestamp(book, streamBook);
   if (ts) return freshnessText(ts);
   if (book?.lastUpdateId || streamBook?.lastUpdateId) return byLang('有快照，缺少时间戳', 'Snapshot, no timestamp');
   return byLang('等待订单薄', 'Waiting for book');
@@ -1370,6 +1381,29 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const nearAsk = (ob?.asks ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
   const nearDepth = nearBid + nearAsk;
   const nearDepthImbalance = nearDepth > 0 ? (nearBid - nearAsk) / nearDepth : 0;
+  const nearDepthShare = totalDepth > 0 ? nearDepth / totalDepth : 0;
+  const topConcentration = Math.max(topBidShare, topAskShare);
+  const nearFullSkewGap = nearDepthImbalance - depthImbalance;
+  const snapshotFreshnessSeconds = ageSeconds(orderbookTimestamp(ob, streamBook));
+  const qualityWarnings = [
+    snapshotFreshnessSeconds != null && snapshotFreshnessSeconds > 30
+      ? byLang('订单薄快照超过 30 秒未更新，请先确认实时采集器状态。', 'The book snapshot is older than 30s; check the live collector status first.')
+      : '',
+    topConcentration >= 0.35
+      ? byLang('买一或卖一集中度偏高，单档撤单会显著改变显示深度。', 'Top-level concentration is high; one-level cancellation can materially change displayed depth.')
+      : '',
+    Math.abs(nearFullSkewGap) >= PRESSURE_THRESHOLD
+      ? byLang('近三档偏斜与全深度偏斜差异较大，近端流动性和远端挂单方向不一致。', 'Top-3 skew differs materially from full-depth skew; near liquidity and farther displayed orders disagree.')
+      : '',
+    nearDepthShare < 0.25
+      ? byLang('近三档深度占比较低，主要显示流动性集中在更远档位。', 'Top-3 depth share is low; most displayed liquidity sits farther from mid.')
+      : '',
+  ].filter(Boolean);
+  const qualityTag = qualityWarnings.length === 0
+    ? <Tag color="green">{byLang('盘口质量可读', 'Book quality readable')}</Tag>
+    : qualityWarnings.length <= 2
+      ? <Tag color="gold">{byLang('盘口需降权', 'Book needs lower weight')}</Tag>
+      : <Tag color="orange">{byLang('盘口质量偏弱', 'Book quality thin')}</Tag>;
   const depthBands = useMemo(() => [1, 3, 5, 10]
     .filter((levels) => levels <= Math.max(bids.length, asks.length))
     .map((levels) => {
@@ -1524,6 +1558,35 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
         <Empty description={byLang('主视角暂无订单薄快照', 'No primary-view book snapshot')} />
       ) : (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type={qualityWarnings.length === 0 ? 'info' : 'warning'}
+            showIcon
+            message={
+              <Space wrap>
+                <Typography.Text>{byLang('Level 2 质量检查', 'Level 2 quality check')}</Typography.Text>
+                {qualityTag}
+              </Space>
+            }
+            description={
+              <Space direction="vertical" size={2}>
+                <Typography.Text type="secondary">
+                  {byLang(
+                    '优先确认快照新鲜度、近端深度占比、单档集中度和近端/全深度偏斜是否一致；订单薄是显示流动性监控，不是交易建议。',
+                    'Check freshness, top-depth share, one-level concentration and top/full-depth skew alignment first; the book is a displayed-liquidity monitor, not trading advice.',
+                  )}
+                </Typography.Text>
+                {qualityWarnings.length === 0 ? (
+                  <Typography.Text type="secondary">
+                    {byLang('当前未触发主要质量降权条件。', 'No major lower-weight condition is active right now.')}
+                  </Typography.Text>
+                ) : (
+                  qualityWarnings.map((item) => (
+                    <Typography.Text key={item} type="secondary">{item}</Typography.Text>
+                  ))
+                )}
+              </Space>
+            }
+          />
           <Row gutter={[12, 12]}>
             <Col xs={12} md={6}>
               <Statistic title={byLang('买盘深度', 'Bid depth')} value={formatNumber(totalBid, 0)} />
@@ -1542,6 +1605,15 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             </Col>
             <Col xs={12} md={6}>
               <Statistic title={byLang('近三档深度', 'Top-3 depth')} value={formatNumber(nearDepth, 0)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('近三档占比', 'Top-3 share')} value={formatPercent(nearDepthShare)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('近端/全深度差异', 'Top/full skew gap')} value={signedPercent(nearFullSkewGap)} valueStyle={{ color: barColor(nearFullSkewGap) }} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('单档集中度', 'Top-level concentration')} value={formatPercent(topConcentration)} />
             </Col>
             <Col xs={12} md={6}>
               <Statistic title={byLang('最大挂单墙', 'Largest wall')} value={largestWall ? formatNumber(largestWall.notional, 0) : '-'} />
