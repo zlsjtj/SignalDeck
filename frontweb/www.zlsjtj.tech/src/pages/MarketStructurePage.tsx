@@ -872,6 +872,18 @@ function directionScore(direction: PressureDirection) {
   return 0;
 }
 
+function correlationStrengthText(value: number) {
+  if (value >= 0.5) return byLang('强同向', 'Strong positive');
+  if (value <= -0.5) return byLang('强反向', 'Strong negative');
+  return byLang('弱 / 中性', 'Weak / neutral');
+}
+
+function correlationStrengthTag(value: number) {
+  if (value >= 0.5) return <Tag color="red">{correlationStrengthText(value)}</Tag>;
+  if (value <= -0.5) return <Tag color="blue">{correlationStrengthText(value)}</Tag>;
+  return <Tag>{correlationStrengthText(value)}</Tag>;
+}
+
 function liveQualityTag(coverageRatio: number, signalQuality: number, freshnessSeconds: number | null) {
   const stale = freshnessSeconds != null && freshnessSeconds > 30;
   if (coverageRatio >= 0.8 && signalQuality >= 0.5 && !stale) {
@@ -1845,15 +1857,44 @@ function RollingCorrelationPanel({
   }>;
 }) {
   const seriesRows = useMemo(() => rows ?? [], [rows]);
+  const latestCorrelationPoints = useMemo(() => seriesRows
+    .map((row) => {
+      const point = row.points.at(-1);
+      return point ? { pair: compactPair(row.left, row.right), correlation: point.correlation, samples: point.samples, ts: point.ts } : null;
+    })
+    .filter((item): item is { pair: string; correlation: number; samples: number; ts: string } => Boolean(item)), [seriesRows]);
+  const latestCorrelationRows = useMemo(() => [...latestCorrelationPoints].sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)), [latestCorrelationPoints]);
+  const latestAverageCorrelation = latestCorrelationPoints.length > 0
+    ? latestCorrelationPoints.reduce((sum, item) => sum + item.correlation, 0) / latestCorrelationPoints.length
+    : null;
+  const strongestCorrelation = latestCorrelationRows[0];
+  const weakestCorrelation = latestCorrelationRows.at(-1);
+  const latestCorrelationTs = latestCorrelationPoints.map((item) => item.ts).sort().at(-1);
+  const totalRollingPoints = seriesRows.reduce((sum, row) => sum + row.points.length, 0);
+  const positiveCorrelationCount = latestCorrelationPoints.filter((item) => item.correlation >= 0.5).length;
+  const negativeCorrelationCount = latestCorrelationPoints.filter((item) => item.correlation <= -0.5).length;
+  const weakCorrelationCount = latestCorrelationPoints.length - positiveCorrelationCount - negativeCorrelationCount;
+  const minLatestSamples = latestCorrelationPoints.length > 0 ? Math.min(...latestCorrelationPoints.map((item) => item.samples)) : 0;
+  const sparseCorrelationSample = seriesRows.length > 0 && (seriesRows.length < 2 || totalRollingPoints < 24 || minLatestSamples < 12);
   const option = useMemo(() => {
     const timestamps = Array.from(new Set(seriesRows.flatMap((row) => row.points.map((point) => point.ts)))).sort();
+    const pointLookup = new Map<string, Map<string, { correlation: number; samples: number }>>();
+    seriesRows.forEach((row) => {
+      pointLookup.set(compactPair(row.left, row.right), new Map(row.points.map((point) => [point.ts, { correlation: point.correlation, samples: point.samples }])));
+    });
     return {
       backgroundColor: 'transparent',
       tooltip: {
         trigger: 'axis',
         formatter: (params: any) => {
           const items = Array.isArray(params) ? params : [params];
-          const lines = items.map((item) => `${item.seriesName}: ${typeof item.data === 'number' ? item.data.toFixed(2) : '-'}`);
+          const lines = items.map((item) => {
+            const point = pointLookup.get(String(item.seriesName))?.get(String(item.axisValue));
+            const value = typeof item.data === 'number' ? item.data.toFixed(2) : '-';
+            const samples = point ? point.samples : '-';
+            const strength = typeof item.data === 'number' ? correlationStrengthText(item.data) : '-';
+            return `${item.seriesName}: ${value} · ${byLang('样本', 'Samples')} ${samples} · ${strength}`;
+          });
           return `${formatTs(String(items[0]?.axisValue ?? ''))}<br/>${lines.join('<br/>')}`;
         },
       },
@@ -1881,6 +1922,18 @@ function RollingCorrelationPanel({
           smooth: true,
           showSymbol: false,
           data: timestamps.map((ts) => values.get(ts) ?? null),
+          markLine: {
+            symbol: 'none',
+            label: {
+              color: 'rgba(215,226,240,0.72)',
+              formatter: (params: any) => String(params.name),
+            },
+            lineStyle: { color: 'rgba(215,226,240,0.28)', type: 'dashed' },
+            data: [
+              { yAxis: 0.5, name: byLang('强同向阈值', 'Strong positive') },
+              { yAxis: -0.5, name: byLang('强反向阈值', 'Strong negative') },
+            ],
+          },
         };
       }),
     };
@@ -1895,6 +1948,43 @@ function RollingCorrelationPanel({
             'Rolling correlation monitors cross-asset structure changes and is not trading advice.',
           )}
         </Typography.Text>
+        {seriesRows.length > 0 ? (
+          <Row gutter={[12, 12]}>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('跟踪交易对', 'Tracked pairs')} value={seriesRows.length} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('滚动样本点', 'Rolling points')} value={totalRollingPoints} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最新均值相关', 'Latest avg corr')} value={latestAverageCorrelation == null ? '-' : latestAverageCorrelation.toFixed(2)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最强当前相关', 'Strongest current corr')} value={strongestCorrelation ? `${strongestCorrelation.pair} ${strongestCorrelation.correlation.toFixed(2)}` : '-'} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最弱当前相关', 'Weakest current corr')} value={weakestCorrelation ? `${weakestCorrelation.pair} ${weakestCorrelation.correlation.toFixed(2)}` : '-'} />
+            </Col>
+          </Row>
+        ) : null}
+        <Space wrap>
+          <Tag>{byLang('相关性提示', 'Correlation monitors')}: {(breaks ?? []).length}</Tag>
+          <Tag color="red">{byLang('强同向', 'Strong positive')}: {positiveCorrelationCount}</Tag>
+          <Tag color="blue">{byLang('强反向', 'Strong negative')}: {negativeCorrelationCount}</Tag>
+          <Tag>{byLang('弱 / 中性', 'Weak / neutral')}: {weakCorrelationCount}</Tag>
+          <Tag color={sparseCorrelationSample ? 'gold' : 'green'}>
+            {sparseCorrelationSample ? byLang('样本偏薄', 'Thin samples') : byLang('样本覆盖正常', 'Coverage normal')}
+          </Tag>
+          {strongestCorrelation ? <Tag>{byLang('最强样本', 'Strongest samples')}: {strongestCorrelation.samples}</Tag> : null}
+          {weakestCorrelation ? <Tag>{byLang('最弱样本', 'Weakest samples')}: {weakestCorrelation.samples}</Tag> : null}
+          {latestCorrelationTs ? <Tag>{byLang('最新截面', 'Latest snapshot')}: {freshnessText(latestCorrelationTs)}</Tag> : null}
+          <Typography.Text type="secondary">
+            {byLang(
+              '相关性接近 1 表示同向联动较强，接近 -1 表示反向联动较强；读数只描述历史窗口关系。',
+              'Correlation near 1 means stronger same-direction linkage, while near -1 means stronger inverse linkage; readings only describe historical-window relationships.',
+            )}
+          </Typography.Text>
+        </Space>
         {(breaks ?? []).length > 0 ? (
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
             {(breaks ?? []).map((item) => (
@@ -1910,12 +2000,63 @@ function RollingCorrelationPanel({
               />
             ))}
           </Space>
+        ) : sparseCorrelationSample ? (
+          <Alert
+            type="warning"
+            showIcon
+            message={byLang('相关性样本覆盖偏薄', 'Correlation sample coverage is thin')}
+            description={byLang(
+              '当前滚动相关可用，但跟踪对数、滚动点数或最新样本偏少；只把它作为联动结构监测背景。',
+              'Rolling correlation is available, but tracked pairs, rolling points or latest samples are thin; use it only as linkage-structure context.',
+            )}
+          />
+        ) : seriesRows.length > 0 ? (
+          <Alert
+            type="info"
+            showIcon
+            message={byLang('暂无相关性断裂提示', 'No correlation-break monitor now')}
+            description={byLang(
+              '当前滚动相关未触发断裂提示；仍需结合成交、盘口和时间结构一起观察。',
+              'Current rolling correlations have not triggered a break monitor; still review them together with flow, book and session structure.',
+            )}
+          />
         ) : null}
         {seriesRows.length === 0 ? (
           <Empty description={byLang('暂无足够 K 线生成滚动相关', 'Not enough kline data for rolling correlation')} />
         ) : (
           <ReactECharts option={option} style={{ height: 260 }} notMerge lazyUpdate />
         )}
+        {latestCorrelationPoints.length > 0 ? (
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Typography.Text strong>{byLang('当前相关截面', 'Current correlation snapshot')}</Typography.Text>
+            <Typography.Text type="secondary">
+              {byLang(
+                '表格按绝对相关强度排序；红色为同向相关，蓝色为反向相关，阈值只用于监测当前联动结构。',
+                'Rows are sorted by absolute correlation strength; red marks same-direction correlation and blue marks inverse correlation, with thresholds used only to monitor current linkage structure.',
+              )}
+            </Typography.Text>
+            <Table
+              size="small"
+              pagination={false}
+              dataSource={latestCorrelationRows.map((item) => ({ ...item, key: item.pair }))}
+              columns={[
+                { title: byLang('交易对', 'Pair'), dataIndex: 'pair' },
+                {
+                  title: byLang('当前相关', 'Current corr'),
+                  dataIndex: 'correlation',
+                  render: (value: number) => (
+                    <Typography.Text style={{ color: value >= 0 ? '#ff4d4f' : '#1677ff' }}>
+                      {value.toFixed(2)}
+                    </Typography.Text>
+                  ),
+                },
+                { title: byLang('样本', 'Samples'), dataIndex: 'samples' },
+                { title: byLang('强度', 'Strength'), dataIndex: 'correlation', responsive: ['md'], render: (value: number) => correlationStrengthTag(value) },
+                { title: byLang('新鲜度', 'Freshness'), dataIndex: 'ts', responsive: ['md'], render: (value: string) => freshnessText(value) },
+              ]}
+            />
+          </Space>
+        ) : null}
       </Space>
     </Card>
   );
