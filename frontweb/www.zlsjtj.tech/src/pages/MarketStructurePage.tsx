@@ -658,6 +658,25 @@ function StructureInsightPanel({
   const streamState = stream?.status === 'running'
     ? byLang('实时流运行中', 'Live stream running')
     : byLang('实时流未运行', 'Live stream not running');
+  const activeSignalCount = [
+    selectedVenue?.orderbook,
+    selectedVenue?.flow,
+    selectedVenue?.stream?.ofi,
+    selectedVenue?.stream?.flow,
+    selectedVenue?.derivatives,
+    basis?.ok ? basis : null,
+  ].filter(Boolean).length;
+  const streamFresh = streamAgeSeconds == null ? 0 : streamAgeSeconds <= 30 ? 1 : streamAgeSeconds <= 180 ? 0.5 : 0;
+  const sampleReadiness = Math.min(1, liveSamples / 200);
+  const sourceReadiness = activeSignalCount / 6;
+  const streamReadiness = stream?.status === 'running' ? 1 : 0;
+  const monitorReadiness = Math.round((streamReadiness * 0.3 + streamFresh * 0.25 + sampleReadiness * 0.25 + sourceReadiness * 0.2) * 100);
+  const readinessType = monitorReadiness >= 75 ? 'success' : monitorReadiness >= 45 ? 'info' : 'warning';
+  const readinessMessage = monitorReadiness >= 75
+    ? byLang('监控就绪度较高', 'Monitor readiness is high')
+    : monitorReadiness >= 45
+      ? byLang('监控可用但需降权', 'Monitor is usable with lower weight')
+      : byLang('监控样本或连接不足', 'Monitor has insufficient samples or connectivity');
 
   return (
     <Card
@@ -679,7 +698,22 @@ function StructureInsightPanel({
           <Col xs={12} md={6}>
             <Statistic title={byLang('相关性提示', 'Correlation monitors')} value={correlationBreaks?.length ?? 0} />
           </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('监控就绪度', 'Monitor readiness')} value={`${monitorReadiness}%`} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('可用信号', 'Available signals')} value={`${activeSignalCount}/6`} />
+          </Col>
         </Row>
+        <Alert
+          type={readinessType}
+          showIcon
+          message={readinessMessage}
+          description={byLang(
+            `就绪度合并实时流状态、更新延迟、实时样本和可用信号数量；当前样本 ${liveSamples}，可用信号 ${activeSignalCount}/6。`,
+            `Readiness combines stream state, update lag, live samples and available signal count; current samples ${liveSamples}, available signals ${activeSignalCount}/6.`,
+          )}
+        />
         <Space wrap>
           <Typography.Text type="secondary">{byLang('主视角', 'Primary')}:</Typography.Text>
           {directionTag(alignedDirection)}
@@ -906,6 +940,12 @@ function liveQualityTag(coverageRatio: number, signalQuality: number, freshnessS
   return <Tag color="orange">{byLang('样本偏薄', 'Thin samples')}</Tag>;
 }
 
+function microstructureReadabilityTag(score: number) {
+  if (score >= 0.75) return <Tag color="green">{byLang('可读性较高', 'High readability')}</Tag>;
+  if (score >= 0.45) return <Tag color="gold">{byLang('谨慎解读', 'Read cautiously')}</Tag>;
+  return <Tag color="orange">{byLang('明显降权', 'Lower weight')}</Tag>;
+}
+
 function MicrostructureFocusPanel({
   venue,
   secondaryVenue,
@@ -941,9 +981,27 @@ function MicrostructureFocusPanel({
   const latestLiveTs = [streamFlow?.latestTs, ofi?.latestTs].filter(Boolean).sort().at(-1);
   const liveFreshnessMs = latestLiveTs ? Date.parse(latestLiveTs) : Number.NaN;
   const liveFreshnessSeconds = Number.isFinite(liveFreshnessMs) ? Math.max(0, Math.round((Date.now() - liveFreshnessMs) / 1000)) : null;
+  const freshnessQuality = liveFreshnessSeconds == null ? 0 : Math.max(0, Math.min(1, 1 - liveFreshnessSeconds / 120));
+  const agreementPenalty = Math.min(1, Math.max(
+    restLiveGap == null ? 0 : Math.abs(restLiveGap) / 0.5,
+    flowOfiGap == null ? 0 : Math.abs(flowOfiGap) / 0.5,
+  ));
+  const liveSamplesPerMinute = coverageSeconds > 0 ? liveSampleCount / (coverageSeconds / 60) : 0;
+  const microstructureReadability = Math.max(0, Math.min(1, (
+    coverageRatio * 0.34
+    + signalQuality * 0.24
+    + freshnessQuality * 0.22
+    + (1 - agreementPenalty) * 0.2
+  )));
+  const readabilityLabel = microstructureReadability >= 0.75
+    ? byLang('短窗样本、时效和一致性支持正常监控。', 'Short-window samples, freshness and agreement support normal monitoring.')
+    : microstructureReadability >= 0.45
+      ? byLang('可用于观察方向，但需要结合质量提示降低确定性。', 'Usable for directional context, but reduce certainty with the quality notes.')
+      : byLang('当前更适合观察采集状态，暂不适合强调方向。', 'Better for checking collector state right now; avoid emphasizing direction.');
   const qualityWarnings = [
     coverageRatio < 0.5 ? byLang('实时窗口覆盖不足 50%，刚启动或重连后应降低解读权重。', 'Live window coverage is below 50%; reduce weight right after startup or reconnect.') : '',
     liveFreshnessSeconds != null && liveFreshnessSeconds > 30 ? byLang('最新实时样本超过 30 秒未更新，请同时查看采集器状态。', 'Latest live sample is older than 30s; also check collector status.') : '',
+    liveSamplesPerMinute > 0 && liveSamplesPerMinute < 3 ? byLang('实时样本密度偏低，短窗方向容易被少数成交或盘口更新影响。', 'Live sample density is low; short-window direction may be driven by a few trades or book updates.') : '',
     restLiveGap != null && Math.abs(restLiveGap) >= PRESSURE_THRESHOLD ? byLang('REST 与 Live Taker ratio 差异较大，说明短窗流向和最近聚合成交不一致。', 'REST and Live taker ratio differ materially, so short-window flow and recent aggregated trades disagree.') : '',
     flowOfiGap != null && Math.abs(flowOfiGap) >= PRESSURE_THRESHOLD ? byLang('实时成交流与 OFI 差异较大，主动成交和订单薄更新压力不一致。', 'Live flow and OFI differ materially, so aggressive trades and book-update pressure disagree.') : '',
   ].filter(Boolean);
@@ -1103,7 +1161,13 @@ function MicrostructureFocusPanel({
             <Statistic title={byLang('样本质量', 'Sample quality')} value={formatPercent(signalQuality)} />
           </Col>
           <Col xs={12} md={6}>
+            <Statistic title={byLang('监控可读性', 'Monitor readability')} value={formatPercent(microstructureReadability)} />
+          </Col>
+          <Col xs={12} md={6}>
             <Statistic title={byLang('窗口覆盖', 'Window coverage')} value={formatPercent(coverageRatio)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('样本密度', 'Sample density')} value={liveSamplesPerMinute > 0 ? `${formatNumber(liveSamplesPerMinute, 1)}/m` : '-'} />
           </Col>
           <Col xs={12} md={6}>
             <Statistic title={byLang('实时新鲜度', 'Live freshness')} value={latestLiveTs ? freshnessText(latestLiveTs) : '-'} />
@@ -1131,8 +1195,25 @@ function MicrostructureFocusPanel({
           <Tag>{byLang('实时样本', 'Live samples')}: {liveSampleCount}</Tag>
           <Tag>{byLang('窗口', 'Window')}: {streamWindowSeconds / 60}m</Tag>
           <Tag>{byLang('覆盖', 'Coverage')}: {formatPercent(coverageRatio)}</Tag>
+          {microstructureReadabilityTag(microstructureReadability)}
           <Tag>{byLang('辅助视角', 'Secondary')}: {signedPercent(secondaryVenue?.flow?.tradeImbalance)}</Tag>
         </Space>
+        <Alert
+          type={microstructureReadability >= 0.75 ? 'success' : microstructureReadability >= 0.45 ? 'info' : 'warning'}
+          showIcon
+          message={byLang('短窗信号可读性', 'Short-window signal readability')}
+          description={
+            <Space direction="vertical" size={2}>
+              <Typography.Text type="secondary">{readabilityLabel}</Typography.Text>
+              <Typography.Text type="secondary">
+                {byLang(
+                  `覆盖 ${formatPercent(coverageRatio)}，样本质量 ${formatPercent(signalQuality)}，新鲜度 ${latestLiveTs ? freshnessText(latestLiveTs) : '-'}，样本密度 ${liveSamplesPerMinute > 0 ? `${formatNumber(liveSamplesPerMinute, 1)}/m` : '-'}。`,
+                  `Coverage ${formatPercent(coverageRatio)}, sample quality ${formatPercent(signalQuality)}, freshness ${latestLiveTs ? freshnessText(latestLiveTs) : '-'}, sample density ${liveSamplesPerMinute > 0 ? `${formatNumber(liveSamplesPerMinute, 1)}/m` : '-'}.`,
+                )}
+              </Typography.Text>
+            </Space>
+          }
+        />
         {timestamps.length === 0 ? (
           <Empty description={byLang('等待实时 Taker / OFI 序列样本', 'Waiting for live Taker / OFI series samples')} />
         ) : (
@@ -2387,12 +2468,36 @@ function StreamObservability({ stream }: { stream?: MarketIntelStreamStatus }) {
   const updatedMs = stream?.updatedAt ? Date.parse(stream.updatedAt) : Number.NaN;
   const updateLagSeconds = Number.isFinite(updatedMs) ? Math.max(0, Math.round((Date.now() - updatedMs) / 1000)) : null;
   const isStale = updateLagSeconds != null && updateLagSeconds > 180;
+  const subscribedStreams = connectionRows.reduce((sum, row) => sum + (row.streams ?? 0), 0);
+  const expectedConnections = Math.max(1, connectionRows.length);
+  const openConnectionRatio = openConnections / expectedConnections;
+  const freshnessScore = updateLagSeconds == null ? 0 : updateLagSeconds <= 30 ? 1 : updateLagSeconds <= 180 ? 0.5 : 0;
+  const errorScore = errorRows.length === 0 && errorConnections === 0 ? 1 : errorConnections === 0 ? 0.7 : 0.25;
+  const streamStateScore = stream?.status === 'running' ? 1 : 0;
+  const collectorHealth = Math.round((streamStateScore * 0.3 + openConnectionRatio * 0.3 + freshnessScore * 0.25 + errorScore * 0.15) * 100);
   const runtimeType = errorConnections > 0 || stream?.status === 'stopped' || isStale ? 'warning' : 'info';
   const runtimeMessage = errorConnections > 0
     ? byLang('部分实时连接异常', 'Some live connections have errors')
     : stream?.status === 'running' && openConnections > 0
       ? byLang('实时采集器运行中', 'Live collector is running')
       : byLang('等待实时采集器连接', 'Waiting for live collector connections');
+  const healthWarnings = [
+    stream?.status !== 'running'
+      ? byLang('实时流未处于 running 状态；页面仍会保留 REST 数据，但实时 OFI / Taker 流需要降权。', 'Stream is not running; REST data remains available, but live OFI / Taker flow needs lower weight.')
+      : '',
+    connectionRows.length === 0
+      ? byLang('后端尚未返回连接明细，优先确认采集器是否已启动并订阅交易对。', 'No connection details returned; first confirm the collector has started and subscribed symbols.')
+      : '',
+    openConnections < expectedConnections
+      ? byLang('部分市场连接未打开，Spot / Futures 交叉检查可能不完整。', 'Some venue connections are not open, so Spot / Futures cross-checks may be incomplete.')
+      : '',
+    isStale
+      ? byLang('采集器更新时间超过 180 秒，需检查 WebSocket 重连和网络状态。', 'Collector update lag is over 180s; check WebSocket reconnects and network state.')
+      : '',
+    errorRows.length > 0
+      ? byLang('存在近期采集器错误；若持续出现，需要查看错误表中的市场和信息。', 'Recent collector errors exist; if they persist, inspect the venue and message in the error table.')
+      : '',
+  ].filter(Boolean);
 
   return (
     <Card title={byLang('采集器状态', 'Collector status')}>
@@ -2406,18 +2511,48 @@ function StreamObservability({ stream }: { stream?: MarketIntelStreamStatus }) {
             'Normal empty states, sample accumulation, partial REST failures and WebSocket connection errors are shown separately so no-liquidation or startup states are not treated as faults.',
           )}
         />
+        <Alert
+          type={collectorHealth >= 75 ? 'success' : collectorHealth >= 45 ? 'info' : 'warning'}
+          showIcon
+          message={byLang('采集器健康度', 'Collector health')}
+          description={
+            <Space direction="vertical" size={2}>
+              <Typography.Text type="secondary">
+                {byLang(
+                  `健康度 ${collectorHealth}%，合并流状态、打开连接比例、更新延迟和近期错误。`,
+                  `Health ${collectorHealth}%, combining stream state, open-connection ratio, update lag and recent errors.`,
+                )}
+              </Typography.Text>
+              {healthWarnings.length === 0 ? (
+                <Typography.Text type="secondary">
+                  {byLang('当前未触发主要采集器健康提示。', 'No major collector-health note is active right now.')}
+                </Typography.Text>
+              ) : (
+                healthWarnings.map((item) => (
+                  <Typography.Text key={item} type="secondary">{item}</Typography.Text>
+                ))
+              )}
+            </Space>
+          }
+        />
         <Row gutter={[12, 12]}>
           <Col xs={12} md={6}>
             <Statistic title={byLang('实时流', 'Stream')} value={stream?.status ?? 'stopped'} />
           </Col>
           <Col xs={12} md={6}>
-            <Statistic title={byLang('订阅流数量', 'Subscribed streams')} value={connectionRows.reduce((sum, row) => sum + (row.streams ?? 0), 0)} />
+            <Statistic title={byLang('订阅流数量', 'Subscribed streams')} value={subscribedStreams} />
           </Col>
           <Col xs={12} md={6}>
             <Statistic title={byLang('打开连接', 'Open connections')} value={openConnections} />
           </Col>
           <Col xs={12} md={6}>
             <Statistic title={byLang('错误连接', 'Error connections')} value={errorConnections} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('连接覆盖', 'Connection coverage')} value={formatPercent(openConnectionRatio)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('健康度', 'Health')} value={`${collectorHealth}%`} />
           </Col>
           <Col xs={24} md={6}>
             <Statistic title={byLang('启动时间', 'Started')} value={stream?.startedAt ? formatTs(stream.startedAt) : '-'} />
@@ -2504,58 +2639,107 @@ function ExternalFeedGuide() {
       detail: byLang('每个指标显示 chain、asset、source、updatedAt 和缺失原因，避免把未覆盖链误解为零值。', 'Every metric should show chain, asset, source, updatedAt and missing-data reason so uncovered chains are not confused with zero values.'),
     },
   ];
+  const readinessRows = [
+    {
+      key: 'configured-source',
+      item: byLang('真实来源', 'Real source'),
+      status: byLang('未配置', 'not configured'),
+      detail: byLang('只有配置真实 RSS、本地 feed、链上 provider 或节点后才展示数据。', 'Show data only after a real RSS, local feed, on-chain provider or node is configured.'),
+    },
+    {
+      key: 'freshness',
+      item: byLang('更新时间', 'Freshness'),
+      status: byLang('待接入', 'pending'),
+      detail: byLang('每条外部数据必须带 updatedAt / publishedAt，并在前端显示过期或缺失状态。', 'Every external row needs updatedAt / publishedAt, with stale or missing state shown in the UI.'),
+    },
+    {
+      key: 'confidence',
+      item: byLang('置信度', 'Confidence'),
+      status: byLang('待接入', 'pending'),
+      detail: byLang('新闻情绪只作为模型估计；需要展示来源、置信度和人工复核入口。', 'News sentiment is only a model estimate; show source, confidence and a human-review path.'),
+    },
+    {
+      key: 'privacy',
+      item: byLang('密钥隔离', 'Secret isolation'),
+      status: byLang('必须满足', 'required'),
+      detail: byLang('密钥只留在服务器环境或密钥文件，不写入源码、构建产物、日志或提交。', 'Secrets stay in server env or secret files, never source, build output, logs or commits.'),
+    },
+  ];
 
   return (
-    <Row gutter={[16, 16]}>
-      <Col xs={24} lg={12}>
-        <Card title={byLang('新闻 NLP / 情绪接入', 'News NLP / sentiment integration')}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message={byLang('当前未配置新闻源', 'No news source configured')}
-              description={byLang(
-                '接入前保持 source_not_configured；配置真实 RSS 或本地 feed 后再展示新闻和模型情绪。',
-                'Keep source_not_configured before integration; show news and model sentiment only after a real RSS or local feed is configured.',
-              )}
-            />
-            <Table
-              size="small"
-              pagination={false}
-              dataSource={newsRows}
-              columns={[
-                { title: byLang('步骤', 'Step'), dataIndex: 'step' },
-                { title: byLang('要求', 'Requirement'), dataIndex: 'detail' },
-              ]}
-            />
-          </Space>
-        </Card>
-      </Col>
-      <Col xs={24} lg={12}>
-        <Card title={byLang('链上数据接入', 'On-chain data integration')}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message={byLang('当前未配置链上数据源', 'No on-chain source configured')}
-              description={byLang(
-                '先接入真实 provider 或节点，再展示聚合指标；未覆盖的链和资产必须显示未配置或数据不足。',
-                'Integrate a real provider or node before showing aggregates; uncovered chains and assets must show not configured or insufficient data.',
-              )}
-            />
-            <Table
-              size="small"
-              pagination={false}
-              dataSource={onchainRows}
-              columns={[
-                { title: byLang('步骤', 'Step'), dataIndex: 'step' },
-                { title: byLang('要求', 'Requirement'), dataIndex: 'detail' },
-              ]}
-            />
-          </Space>
-        </Card>
-      </Col>
-    </Row>
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        message={byLang('外部源保持未配置状态', 'External feeds remain not configured')}
+        description={byLang(
+          '页面只展示接入要求和检查项，不展示模拟新闻、模拟情绪或模拟链上数据。',
+          'This page only shows integration requirements and checks; it does not show simulated news, sentiment or on-chain data.',
+        )}
+      />
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={12}>
+          <Card title={byLang('新闻 NLP / 情绪接入', 'News NLP / sentiment integration')}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Alert
+                type="info"
+                showIcon
+                message={byLang('当前未配置新闻源', 'No news source configured')}
+                description={byLang(
+                  '接入前保持 source_not_configured；配置真实 RSS 或本地 feed 后再展示新闻和模型情绪。',
+                  'Keep source_not_configured before integration; show news and model sentiment only after a real RSS or local feed is configured.',
+                )}
+              />
+              <Table
+                size="small"
+                pagination={false}
+                dataSource={newsRows}
+                columns={[
+                  { title: byLang('步骤', 'Step'), dataIndex: 'step' },
+                  { title: byLang('要求', 'Requirement'), dataIndex: 'detail' },
+                ]}
+              />
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title={byLang('链上数据接入', 'On-chain data integration')}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Alert
+                type="info"
+                showIcon
+                message={byLang('当前未配置链上数据源', 'No on-chain source configured')}
+                description={byLang(
+                  '先接入真实 provider 或节点，再展示聚合指标；未覆盖的链和资产必须显示未配置或数据不足。',
+                  'Integrate a real provider or node before showing aggregates; uncovered chains and assets must show not configured or insufficient data.',
+                )}
+              />
+              <Table
+                size="small"
+                pagination={false}
+                dataSource={onchainRows}
+                columns={[
+                  { title: byLang('步骤', 'Step'), dataIndex: 'step' },
+                  { title: byLang('要求', 'Requirement'), dataIndex: 'detail' },
+                ]}
+              />
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+      <Card title={byLang('外部数据上线检查', 'External data launch checks')}>
+        <Table
+          size="small"
+          pagination={false}
+          dataSource={readinessRows}
+          columns={[
+            { title: byLang('检查项', 'Check'), dataIndex: 'item' },
+            { title: byLang('状态', 'Status'), dataIndex: 'status', render: (value: string) => <Tag>{value}</Tag> },
+            { title: byLang('要求', 'Requirement'), dataIndex: 'detail' },
+          ]}
+        />
+      </Card>
+    </Space>
   );
 }
 
