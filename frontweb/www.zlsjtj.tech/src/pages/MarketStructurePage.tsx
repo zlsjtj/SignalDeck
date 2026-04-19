@@ -1319,9 +1319,9 @@ function VenueCard({
 function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const ob = venue?.orderbook;
   const streamBook = venue?.stream?.orderbook;
+  const bids = useMemo(() => ob?.bids ?? [], [ob?.bids]);
+  const asks = useMemo(() => ob?.asks ?? [], [ob?.asks]);
   const rows = useMemo(() => {
-    const bids = ob?.bids ?? [];
-    const asks = ob?.asks ?? [];
     const max = Math.max(bids.length, asks.length);
     let cumulativeBid = 0;
     let cumulativeAsk = 0;
@@ -1332,7 +1332,7 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
       bidCumulative: bids[idx] ? (cumulativeBid += bids[idx].notional) : cumulativeBid,
       askCumulative: asks[idx] ? (cumulativeAsk += asks[idx].notional) : cumulativeAsk,
     }));
-  }, [ob]);
+  }, [asks, bids]);
   const totalBid = ob?.bidNotional ?? 0;
   const totalAsk = ob?.askNotional ?? 0;
   const totalDepth = totalBid + totalAsk;
@@ -1343,6 +1343,22 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const nearAsk = (ob?.asks ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
   const nearDepth = nearBid + nearAsk;
   const nearDepthImbalance = nearDepth > 0 ? (nearBid - nearAsk) / nearDepth : 0;
+  const depthBands = useMemo(() => [1, 3, 5, 10]
+    .filter((levels) => levels <= Math.max(bids.length, asks.length))
+    .map((levels) => {
+      const bandBid = bids.slice(0, levels).reduce((sum, level) => sum + level.notional, 0);
+      const bandAsk = asks.slice(0, levels).reduce((sum, level) => sum + level.notional, 0);
+      const bandTotal = bandBid + bandAsk;
+      return {
+        key: levels,
+        band: `Top ${levels}`,
+        bidNotional: bandBid,
+        askNotional: bandAsk,
+        totalNotional: bandTotal,
+        imbalance: bandTotal > 0 ? (bandBid - bandAsk) / bandTotal : 0,
+        share: totalDepth > 0 ? bandTotal / totalDepth : 0,
+      };
+    }), [asks, bids, totalDepth]);
   const liquidityWalls = useMemo(() => {
     const mid = ob?.mid ?? 0;
     const bidWalls = [...(ob?.bids ?? [])]
@@ -1529,6 +1545,7 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             />
           </div>
           <ReactECharts option={depthChartOption} style={{ height: 280 }} notMerge lazyUpdate />
+          <Typography.Text strong>{byLang('显示流动性墙', 'Displayed liquidity walls')}</Typography.Text>
           <Table
             size="small"
             pagination={false}
@@ -1546,11 +1563,25 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
               { title: byLang('距中间价', 'Distance to mid'), dataIndex: 'distancePct', responsive: ['lg'], render: (v: number | null) => v == null ? '-' : signedPercent(v, 3) },
             ]}
           />
+          <Typography.Text strong>{byLang('深度分层', 'Depth bands')}</Typography.Text>
+          <Table
+            size="small"
+            pagination={false}
+            dataSource={depthBands}
+            columns={[
+              { title: byLang('深度范围', 'Depth band'), dataIndex: 'band' },
+              { title: byLang('买盘累计', 'Bid cumulative'), dataIndex: 'bidNotional', render: (v: number) => formatNumber(v, 0) },
+              { title: byLang('卖盘累计', 'Ask cumulative'), dataIndex: 'askNotional', render: (v: number) => formatNumber(v, 0) },
+              { title: byLang('区间偏斜', 'Band skew'), dataIndex: 'imbalance', render: (v: number) => <Typography.Text style={{ color: barColor(v) }}>{signedPercent(v)}</Typography.Text> },
+              { title: byLang('总深度占比', 'Total-depth share'), dataIndex: 'share', responsive: ['md'], render: (v: number) => formatPercent(v) },
+            ]}
+          />
+          <Typography.Text strong>{byLang('逐档快照', 'Level snapshot')}</Typography.Text>
           <Table size="small" pagination={false} columns={columns} dataSource={rows} />
           <Typography.Text type="secondary">
             {byLang(
-              '累计深度和挂单墙用于观察显示流动性的集中位置；订单薄是快照，可能快速变化。',
-              'Cumulative depth and liquidity walls help locate displayed liquidity concentration; the order book is a snapshot and can change quickly.',
+              '深度分层、累计深度和挂单墙用于观察显示流动性集中在近端还是远端；订单薄是快照，可能快速变化。',
+              'Depth bands, cumulative depth and liquidity walls help show whether displayed liquidity is concentrated near or farther from mid; the order book is a snapshot and can change quickly.',
             )}
           </Typography.Text>
         </Space>
