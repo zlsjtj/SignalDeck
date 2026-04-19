@@ -2439,6 +2439,9 @@ function LiquidationPanel({
     };
   }, [rows]);
   const aggregate = apiAggregate ?? fallbackAggregate;
+  const latestLiquidationTs = rows[0]?.ts;
+  const last5mTotalNotional = aggregate.last5m.totalNotional ?? 0;
+  const hasRecentLiquidations = aggregate.last5m.count > 0;
 
   return (
     <Card title={byLang('爆仓流', 'Liquidations')}>
@@ -2466,7 +2469,24 @@ function LiquidationPanel({
             <Col xs={12} md={6}>
               <Statistic title={byLang('最近 5 分钟笔数', 'Last 5m orders')} value={aggregate.last5m.count} />
             </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最近 5 分钟名义额', 'Last 5m notional')} value={last5mTotalNotional} precision={0} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最近记录', 'Latest record')} value={latestLiquidationTs ? freshnessText(latestLiquidationTs) : '-'} />
+            </Col>
           </Row>
+          {!hasRecentLiquidations ? (
+            <Alert
+              type="info"
+              showIcon
+              message={byLang('最近 5 分钟暂无爆仓', 'No liquidations in the last 5m')}
+              description={byLang(
+                '下方列表保留较早的强平记录；最近 5 分钟为空是正常状态，不代表采集器故障。',
+                'The table keeps earlier forced-order records; an empty last-5m window is normal and does not mean the collector failed.',
+              )}
+            />
+          ) : null}
           <div>
             <Space wrap style={{ marginBottom: 6 }}>
               <Typography.Text type="secondary">{byLang('最近 5 分钟多空名义额比例', 'Last 5m long/short notional ratio')}</Typography.Text>
