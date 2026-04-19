@@ -2028,6 +2028,9 @@ function SessionResearchPanel({
   const positiveHours = [...sessionRows].filter((row) => row.count > 0).sort((a, b) => b.avgReturnPct - a.avgReturnPct).slice(0, 3);
   const negativeHours = [...sessionRows].filter((row) => row.count > 0).sort((a, b) => a.avgReturnPct - b.avgReturnPct).slice(0, 3);
   const sampleCoverage = totalBars > 0 ? Math.min(1, totalBars / Math.max(1, lookbackBars)) : 0;
+  const coveredHours = sessionRows.filter((row) => row.count > 0).length;
+  const avgBarsPerCoveredHour = coveredHours > 0 ? totalBars / coveredHours : 0;
+  const sparseSessionSample = totalBars > 0 && (sampleCoverage < 0.6 || coveredHours < 12 || avgBarsPerCoveredHour < 8);
   const option = useMemo(() => ({
     backgroundColor: 'transparent',
     tooltip: {
@@ -2102,6 +2105,25 @@ function SessionResearchPanel({
             <Statistic title={byLang('全时段均量', 'All-hour avg volume')} value={formatNumber(avgVolume, 2)} />
           </Col>
         </Row>
+        {totalBars > 0 ? (
+          <Alert
+            type={sparseSessionSample ? 'warning' : 'info'}
+            showIcon
+            message={sparseSessionSample ? byLang('时间段样本偏薄', 'Session sample is sparse') : byLang('时间段样本覆盖正常', 'Session sample coverage is normal')}
+            description={
+              <Space wrap>
+                <Typography.Text type="secondary">
+                  {byLang(
+                    '时间段效应只用于观察历史分布；覆盖不足或每小时样本偏少时，应降低对单个小时结论的权重。',
+                    'Session effects only monitor historical distribution; reduce weight on single-hour conclusions when coverage or per-hour samples are thin.',
+                  )}
+                </Typography.Text>
+                <Tag>{byLang('覆盖小时', 'Covered hours')}: {coveredHours}/24</Tag>
+                <Tag>{byLang('每小时均样本', 'Avg bars/hour')}: {formatNumber(avgBarsPerCoveredHour, 1)}</Tag>
+              </Space>
+            }
+          />
+        ) : null}
         <Space wrap>
           <Typography.Text type="secondary">{byLang('活跃时段', 'Active hours')}:</Typography.Text>
           {activeHours.map((row) => (
