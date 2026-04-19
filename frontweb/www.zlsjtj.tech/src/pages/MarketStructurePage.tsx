@@ -872,6 +872,17 @@ function directionScore(direction: PressureDirection) {
   return 0;
 }
 
+function liveQualityTag(coverageRatio: number, signalQuality: number, freshnessSeconds: number | null) {
+  const stale = freshnessSeconds != null && freshnessSeconds > 30;
+  if (coverageRatio >= 0.8 && signalQuality >= 0.5 && !stale) {
+    return <Tag color="green">{byLang('实时质量可用', 'Live quality ready')}</Tag>;
+  }
+  if (coverageRatio >= 0.5 || signalQuality >= 0.25) {
+    return <Tag color="gold">{byLang('样本积累中', 'Samples building')}</Tag>;
+  }
+  return <Tag color="orange">{byLang('样本偏薄', 'Thin samples')}</Tag>;
+}
+
 function MicrostructureFocusPanel({
   venue,
   secondaryVenue,
@@ -896,7 +907,8 @@ function MicrostructureFocusPanel({
   const divergence = [primaryFlowDirection, liveFlowDirection, ofiDirection, bookDirection].filter((item) => item === 'buy' || item === 'sell');
   const hasDivergence = divergence.includes('buy') && divergence.includes('sell');
   const alignmentScore = directionScore(primaryFlowDirection) + directionScore(liveFlowDirection) + directionScore(ofiDirection) + directionScore(bookDirection);
-  const signalQuality = Math.min(1, ((streamFlow?.samples ?? 0) + (ofi?.samples ?? 0)) / 200);
+  const liveSampleCount = (streamFlow?.samples ?? 0) + (ofi?.samples ?? 0);
+  const signalQuality = Math.min(1, liveSampleCount / 200);
   const flowNotional = (flow?.buyNotional ?? 0) + (flow?.sellNotional ?? 0);
   const liveNotional = (streamFlow?.buyNotional ?? 0) + (streamFlow?.sellNotional ?? 0);
   const coverageSeconds = Math.max(streamFlow?.availableSeconds ?? 0, ofi?.availableSeconds ?? 0);
@@ -1092,7 +1104,10 @@ function MicrostructureFocusPanel({
           <Space size={4}>Live Flow {directionTag(liveFlowDirection)}</Space>
           <Space size={4}>OFI {directionTag(ofiDirection)}</Space>
           <Space size={4}>Book {directionTag(bookDirection)}</Space>
+          {liveQualityTag(coverageRatio, signalQuality, liveFreshnessSeconds)}
+          <Tag>{byLang('实时样本', 'Live samples')}: {liveSampleCount}</Tag>
           <Tag>{byLang('窗口', 'Window')}: {streamWindowSeconds / 60}m</Tag>
+          <Tag>{byLang('覆盖', 'Coverage')}: {formatPercent(coverageRatio)}</Tag>
           <Tag>{byLang('辅助视角', 'Secondary')}: {signedPercent(secondaryVenue?.flow?.tradeImbalance)}</Tag>
         </Space>
         {timestamps.length === 0 ? (
