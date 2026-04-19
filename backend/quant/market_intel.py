@@ -825,25 +825,44 @@ def _summarize_trade_window(venue: str, symbol: str, now_ms: int, window_ms: int
     if not rows:
         return {
             "samples": 0,
+            "buyTrades": 0,
+            "sellTrades": 0,
             "buyNotional": 0.0,
             "sellNotional": 0.0,
             "takerBuyRatio": 0.0,
             "imbalance": 0.0,
             "latestTs": "",
             "availableSeconds": 0,
+            "tradesPerMinute": 0.0,
+            "notionalPerMinute": 0.0,
+            "avgTradeNotional": 0.0,
+            "largestTradeNotional": 0.0,
+            "largestTradeShare": 0.0,
             "series": [],
         }
     buy = sum(_to_float(row.get("notional")) for row in rows if row.get("side") == "buy")
     sell = sum(_to_float(row.get("notional")) for row in rows if row.get("side") == "sell")
     total = buy + sell
+    available_seconds = _window_available_seconds(rows)
+    available_minutes = available_seconds / 60.0 if available_seconds > 0 else 0.0
+    largest_notional = max((_to_float(row.get("notional")) for row in rows), default=0.0)
+    buy_trades = sum(1 for row in rows if row.get("side") == "buy")
+    sell_trades = sum(1 for row in rows if row.get("side") == "sell")
     return {
         "samples": len(rows),
+        "buyTrades": buy_trades,
+        "sellTrades": sell_trades,
         "buyNotional": buy,
         "sellNotional": sell,
         "takerBuyRatio": buy / total if total > 0 else 0.0,
         "imbalance": (buy - sell) / total if total > 0 else 0.0,
         "latestTs": str(rows[-1].get("ts") or ""),
-        "availableSeconds": _window_available_seconds(rows),
+        "availableSeconds": available_seconds,
+        "tradesPerMinute": len(rows) / available_minutes if available_minutes > 0 else 0.0,
+        "notionalPerMinute": total / available_minutes if available_minutes > 0 else 0.0,
+        "avgTradeNotional": total / len(rows) if rows else 0.0,
+        "largestTradeNotional": largest_notional,
+        "largestTradeShare": largest_notional / total if total > 0 else 0.0,
         "series": _trade_series(rows, window_ms),
     }
 

@@ -328,12 +328,19 @@ export type MarketIntelOfiSummary = {
 
 export type MarketIntelStreamFlow = {
   samples: number;
+  buyTrades?: number;
+  sellTrades?: number;
   buyNotional: number;
   sellNotional: number;
   takerBuyRatio: number;
   imbalance: number;
   latestTs: string;
   availableSeconds?: number;
+  tradesPerMinute?: number;
+  notionalPerMinute?: number;
+  avgTradeNotional?: number;
+  largestTradeNotional?: number;
+  largestTradeShare?: number;
   series?: Array<{
     ts: string;
     buyNotional: number;

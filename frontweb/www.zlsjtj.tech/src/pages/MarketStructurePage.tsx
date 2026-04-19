@@ -996,6 +996,13 @@ function MicrostructureFocusPanel({
   const restTradesPerMinute = flow?.tradesPerMinute ?? 0;
   const restNotionalPerMinute = flow?.notionalPerMinute ?? 0;
   const restLargestTradeShare = flow?.largestTradeShare ?? 0;
+  const liveTradesPerMinute = streamFlow?.tradesPerMinute ?? 0;
+  const liveNotionalPerMinute = streamFlow?.notionalPerMinute ?? 0;
+  const liveLargestTradeShare = streamFlow?.largestTradeShare ?? 0;
+  const liveBuyTrades = streamFlow?.buyTrades ?? 0;
+  const liveSellTrades = streamFlow?.sellTrades ?? 0;
+  const liveTradeCount = liveBuyTrades + liveSellTrades;
+  const liveBuyTradeRatio = liveTradeCount > 0 ? liveBuyTrades / liveTradeCount : null;
   const coverageSeconds = Math.max(streamFlow?.availableSeconds ?? 0, ofi?.availableSeconds ?? 0);
   const coverageRatio = Math.min(1, coverageSeconds / streamWindowSeconds);
   const restLiveGap = flow && streamFlow ? (streamFlow.takerBuyRatio - flow.takerBuyRatio) : null;
@@ -1034,6 +1041,7 @@ function MicrostructureFocusPanel({
     restLiveGap != null && Math.abs(restLiveGap) >= PRESSURE_THRESHOLD ? byLang('REST 与 Live Taker ratio 差异较大，说明短窗流向和最近聚合成交不一致。', 'REST and Live taker ratio differ materially, so short-window flow and recent aggregated trades disagree.') : '',
     flowOfiGap != null && Math.abs(flowOfiGap) >= PRESSURE_THRESHOLD ? byLang('实时成交流与 OFI 差异较大，主动成交和订单薄更新压力不一致。', 'Live flow and OFI differ materially, so aggressive trades and book-update pressure disagree.') : '',
     restLargestTradeShare >= 0.35 ? byLang('REST 聚合成交中最大单笔占比较高，Taker ratio 可能被少数大额成交影响。', 'The largest REST aggregated trade share is high, so Taker ratio may be driven by a few large trades.') : '',
+    liveLargestTradeShare >= 0.35 ? byLang('实时窗口最大单笔占比较高，短窗方向可能由少数大额成交主导。', 'The largest live-window trade share is high, so short-window direction may be led by a few large trades.') : '',
   ].filter(Boolean);
   const reviewRows = [
     {
@@ -1094,6 +1102,26 @@ function MicrostructureFocusPanel({
       detail: byLang(
         '最大单笔占比越高，主动成交方向越需要结合样本数和订单薄更新复核。',
         'The higher the largest-trade share, the more taker direction needs sample-count and book-update review.',
+      ),
+    },
+    {
+      key: 'live-density',
+      item: byLang('实时成交密度', 'Live trade density'),
+      status: streamFlow ? (liveTradesPerMinute >= 3 ? 'ok' : liveTradesPerMinute > 0 ? 'watch' : 'risk') : 'watch',
+      value: liveTradesPerMinute > 0 ? `${formatNumber(liveTradesPerMinute, 1)}/m` : '-',
+      detail: byLang(
+        '实时成交密度偏低时，短窗 Taker ratio 和 OFI 更需要结合订单薄快照复核。',
+        'When live trade density is low, short-window Taker ratio and OFI need more book-snapshot review.',
+      ),
+    },
+    {
+      key: 'live-large-trade',
+      item: byLang('实时大额集中度', 'Live large-trade concentration'),
+      status: liveLargestTradeShare < 0.25 ? 'ok' : liveLargestTradeShare < 0.4 ? 'watch' : 'risk',
+      value: formatPercent(liveLargestTradeShare),
+      detail: byLang(
+        '实时最大单笔占比越高，当前窗口方向越可能受单笔成交扰动。',
+        'The higher the largest live-trade share, the more current-window direction may be disturbed by one trade.',
       ),
     },
     {
@@ -1327,6 +1355,18 @@ function MicrostructureFocusPanel({
           <Col xs={12} md={6}>
             <Statistic title={byLang('最大单笔占比', 'Largest trade share')} value={formatPercent(restLargestTradeShare)} />
           </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时成交密度', 'Live trade density')} value={liveTradesPerMinute > 0 ? `${formatNumber(liveTradesPerMinute, 1)}/m` : '-'} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时名义额速度', 'Live notional velocity')} value={liveNotionalPerMinute > 0 ? formatNumber(liveNotionalPerMinute, 0) : '-'} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时买入笔数占比', 'Live buy-trade ratio')} value={liveBuyTradeRatio == null ? '-' : formatPercent(liveBuyTradeRatio)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('实时最大单笔占比', 'Live largest share')} value={formatPercent(liveLargestTradeShare)} />
+          </Col>
         </Row>
         <Space wrap>
           <Typography.Text type="secondary">{byLang('方向检查', 'Direction check')}:</Typography.Text>
@@ -1541,6 +1581,15 @@ function VenueCard({
           </Col>
           <Col xs={12} lg={8}>
             <MetricTile title={byLang('实时样本', 'Live samples')} value={(stream?.ofi?.samples ?? 0) + (stream?.flow?.samples ?? 0)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('实时成交密度', 'Live trade density')} value={(stream?.flow?.tradesPerMinute ?? 0) > 0 ? `${formatNumber(stream?.flow?.tradesPerMinute ?? 0, 1)}/m` : '-'} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('实时名义额速度', 'Live notional velocity')} value={(stream?.flow?.notionalPerMinute ?? 0) > 0 ? formatNumber(stream?.flow?.notionalPerMinute ?? 0, 0) : '-'} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('实时最大单笔占比', 'Live largest share')} value={formatPercent(stream?.flow?.largestTradeShare ?? 0)} />
           </Col>
         </MetricGroup>
 
