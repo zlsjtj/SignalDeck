@@ -172,6 +172,9 @@ def _fetch_agg_trade_flow(venue: str, symbol: str, limit: int = 500) -> Dict[str
     sell_qty = 0.0
     buy_notional = 0.0
     sell_notional = 0.0
+    largest_notional = 0.0
+    first_ts_ms = 0
+    latest_ts_ms = 0
     latest_ts = ""
     for row in rows if isinstance(rows, list) else []:
         qty = _to_float(row.get("q"))
@@ -179,7 +182,10 @@ def _fetch_agg_trade_flow(venue: str, symbol: str, limit: int = 500) -> Dict[str
         notional = qty * price
         ts_ms = int(_to_float(row.get("T"), 0.0))
         if ts_ms > 0:
+            first_ts_ms = ts_ms if first_ts_ms <= 0 else min(first_ts_ms, ts_ms)
+            latest_ts_ms = max(latest_ts_ms, ts_ms)
             latest_ts = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat()
+        largest_notional = max(largest_notional, notional)
         # Binance aggTrade `m=true` means the buyer is maker, so the taker sold.
         if bool(row.get("m")):
             sell_qty += qty
@@ -189,6 +195,9 @@ def _fetch_agg_trade_flow(venue: str, symbol: str, limit: int = 500) -> Dict[str
             buy_notional += notional
     total_qty = buy_qty + sell_qty
     total_notional = buy_notional + sell_notional
+    trade_count = len(rows) if isinstance(rows, list) else 0
+    duration_seconds = max(0.0, (latest_ts_ms - first_ts_ms) / 1000.0) if first_ts_ms > 0 and latest_ts_ms > 0 else 0.0
+    duration_minutes = duration_seconds / 60.0 if duration_seconds > 0 else 0.0
     return {
         "source": "aggTrades",
         "buyQty": buy_qty,
@@ -198,8 +207,15 @@ def _fetch_agg_trade_flow(venue: str, symbol: str, limit: int = 500) -> Dict[str
         "takerBuyRatio": buy_qty / total_qty if total_qty > 0 else 0.0,
         "takerBuyNotionalRatio": buy_notional / total_notional if total_notional > 0 else 0.0,
         "tradeImbalance": (buy_notional - sell_notional) / total_notional if total_notional > 0 else 0.0,
-        "tradeCount": len(rows) if isinstance(rows, list) else 0,
+        "tradeCount": trade_count,
         "latestTs": latest_ts,
+        "firstTs": datetime.fromtimestamp(first_ts_ms / 1000.0, tz=timezone.utc).isoformat() if first_ts_ms > 0 else "",
+        "durationSeconds": duration_seconds,
+        "tradesPerMinute": trade_count / duration_minutes if duration_minutes > 0 else 0.0,
+        "notionalPerMinute": total_notional / duration_minutes if duration_minutes > 0 else 0.0,
+        "avgTradeNotional": total_notional / trade_count if trade_count > 0 else 0.0,
+        "largestTradeNotional": largest_notional,
+        "largestTradeShare": largest_notional / total_notional if total_notional > 0 else 0.0,
     }
 
 

@@ -111,6 +111,13 @@ function freshnessText(ts?: string) {
     : byLang(`${Math.round(seconds / 60)} 分钟前`, `${Math.round(seconds / 60)}m ago`);
 }
 
+function durationText(seconds?: number | null) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return '-';
+  if (seconds < 60) return byLang(`${Math.round(seconds)} 秒`, `${Math.round(seconds)}s`);
+  if (seconds < 3600) return byLang(`${Math.round(seconds / 60)} 分钟`, `${Math.round(seconds / 60)}m`);
+  return byLang(`${formatNumber(seconds / 3600, 1)} 小时`, `${formatNumber(seconds / 3600, 1)}h`);
+}
+
 function ageSeconds(ts?: string) {
   if (!ts) return null;
   const parsed = Date.parse(ts);
@@ -985,6 +992,10 @@ function MicrostructureFocusPanel({
   const signalQuality = Math.min(1, liveSampleCount / 200);
   const flowNotional = (flow?.buyNotional ?? 0) + (flow?.sellNotional ?? 0);
   const liveNotional = (streamFlow?.buyNotional ?? 0) + (streamFlow?.sellNotional ?? 0);
+  const restFlowDurationSeconds = flow?.durationSeconds ?? 0;
+  const restTradesPerMinute = flow?.tradesPerMinute ?? 0;
+  const restNotionalPerMinute = flow?.notionalPerMinute ?? 0;
+  const restLargestTradeShare = flow?.largestTradeShare ?? 0;
   const coverageSeconds = Math.max(streamFlow?.availableSeconds ?? 0, ofi?.availableSeconds ?? 0);
   const coverageRatio = Math.min(1, coverageSeconds / streamWindowSeconds);
   const restLiveGap = flow && streamFlow ? (streamFlow.takerBuyRatio - flow.takerBuyRatio) : null;
@@ -1022,6 +1033,7 @@ function MicrostructureFocusPanel({
     liveSamplesPerMinute > 0 && liveSamplesPerMinute < 3 ? byLang('实时样本密度偏低，短窗方向容易被少数成交或盘口更新影响。', 'Live sample density is low; short-window direction may be driven by a few trades or book updates.') : '',
     restLiveGap != null && Math.abs(restLiveGap) >= PRESSURE_THRESHOLD ? byLang('REST 与 Live Taker ratio 差异较大，说明短窗流向和最近聚合成交不一致。', 'REST and Live taker ratio differ materially, so short-window flow and recent aggregated trades disagree.') : '',
     flowOfiGap != null && Math.abs(flowOfiGap) >= PRESSURE_THRESHOLD ? byLang('实时成交流与 OFI 差异较大，主动成交和订单薄更新压力不一致。', 'Live flow and OFI differ materially, so aggressive trades and book-update pressure disagree.') : '',
+    restLargestTradeShare >= 0.35 ? byLang('REST 聚合成交中最大单笔占比较高，Taker ratio 可能被少数大额成交影响。', 'The largest REST aggregated trade share is high, so Taker ratio may be driven by a few large trades.') : '',
   ].filter(Boolean);
   const reviewRows = [
     {
@@ -1062,6 +1074,26 @@ function MicrostructureFocusPanel({
       detail: byLang(
         '主动成交和订单薄更新压力背离时，应把它当成结构变化提示，而不是单向结论。',
         'When aggressive flow and book-update pressure diverge, treat it as a structure-change monitor, not a one-way conclusion.',
+      ),
+    },
+    {
+      key: 'rest-span',
+      item: byLang('REST 成交跨度', 'REST trade span'),
+      status: flow ? (restFlowDurationSeconds >= 60 ? 'ok' : restFlowDurationSeconds >= 15 ? 'watch' : 'risk') : 'watch',
+      value: durationText(restFlowDurationSeconds),
+      detail: byLang(
+        '聚合成交跨度太短时，REST Taker ratio 更像瞬时读数，不能替代实时窗口。',
+        'When aggregated trades cover only a short span, REST Taker ratio is closer to an instant reading and does not replace the live window.',
+      ),
+    },
+    {
+      key: 'large-trade',
+      item: byLang('大额成交集中度', 'Large-trade concentration'),
+      status: restLargestTradeShare < 0.25 ? 'ok' : restLargestTradeShare < 0.4 ? 'watch' : 'risk',
+      value: formatPercent(restLargestTradeShare),
+      detail: byLang(
+        '最大单笔占比越高，主动成交方向越需要结合样本数和订单薄更新复核。',
+        'The higher the largest-trade share, the more taker direction needs sample-count and book-update review.',
       ),
     },
     {
@@ -1112,7 +1144,7 @@ function MicrostructureFocusPanel({
       sample: flow ? byLang(`${flow.tradeCount} 笔`, `${flow.tradeCount} trades`) : '-',
       notional: flow ? formatNumber(flowNotional, 0) : '-',
       freshness: flow?.latestTs ? formatTs(flow.latestTs) : '-',
-      role: byLang('最近聚合成交方向', 'Recent aggregated trade direction'),
+      role: byLang(`最近聚合成交方向；跨度 ${durationText(restFlowDurationSeconds)}`, `Recent aggregated trade direction; span ${durationText(restFlowDurationSeconds)}`),
     },
     {
       key: 'live-flow',
@@ -1283,6 +1315,18 @@ function MicrostructureFocusPanel({
           <Col xs={12} md={6}>
             <Statistic title={byLang('REST 成交流名义额', 'REST flow notional')} value={formatNumber(flowNotional, 0)} />
           </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('REST 成交跨度', 'REST trade span')} value={durationText(restFlowDurationSeconds)} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('REST 成交密度', 'REST trade density')} value={restTradesPerMinute > 0 ? `${formatNumber(restTradesPerMinute, 1)}/m` : '-'} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('REST 名义额速度', 'REST notional velocity')} value={restNotionalPerMinute > 0 ? formatNumber(restNotionalPerMinute, 0) : '-'} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title={byLang('最大单笔占比', 'Largest trade share')} value={formatPercent(restLargestTradeShare)} />
+          </Col>
         </Row>
         <Space wrap>
           <Typography.Text type="secondary">{byLang('方向检查', 'Direction check')}:</Typography.Text>
@@ -1391,6 +1435,7 @@ function VenueCard({
     samples: point.samples,
   }));
   const coverageSeconds = Math.max(stream?.ofi?.availableSeconds ?? 0, stream?.flow?.availableSeconds ?? 0);
+  const flowNotional = (flow?.buyNotional ?? 0) + (flow?.sellNotional ?? 0);
   return (
     <Card
       style={isPrimary ? { borderColor: '#ff4d4f' } : undefined}
@@ -1461,6 +1506,24 @@ function VenueCard({
           </Col>
           <Col xs={12} lg={8}>
             <MetricTile title={byLang('量比', 'Volume ratio')} value={`${formatNumber(venue.volumeRatio, 2)}x`} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('成交跨度', 'Trade span')} value={durationText(flow?.durationSeconds)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('成交密度', 'Trade density')} value={(flow?.tradesPerMinute ?? 0) > 0 ? `${formatNumber(flow?.tradesPerMinute ?? 0, 1)}/m` : '-'} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('最大单笔占比', 'Largest trade share')} value={formatPercent(flow?.largestTradeShare ?? 0)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('平均单笔名义额', 'Avg trade notional')} value={formatNumber(flow?.avgTradeNotional ?? 0, 0)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('最大单笔名义额', 'Largest trade notional')} value={formatNumber(flow?.largestTradeNotional ?? 0, 0)} />
+          </Col>
+          <Col xs={12} lg={8}>
+            <MetricTile title={byLang('主动成交名义额', 'Taker flow notional')} value={formatNumber(flowNotional, 0)} />
           </Col>
         </MetricGroup>
 

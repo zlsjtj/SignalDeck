@@ -283,6 +283,13 @@ export type MarketIntelFlow = {
   tradeImbalance: number;
   tradeCount: number;
   latestTs: string;
+  firstTs?: string;
+  durationSeconds?: number;
+  tradesPerMinute?: number;
+  notionalPerMinute?: number;
+  avgTradeNotional?: number;
+  largestTradeNotional?: number;
+  largestTradeShare?: number;
 };
 
 export type MarketIntelDerivatives = {
