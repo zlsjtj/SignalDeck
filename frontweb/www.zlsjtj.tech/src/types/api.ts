@@ -454,6 +454,18 @@ export type MarketIntelBasis = {
   futuresMid: number | null;
   basis: number | null;
   basisPct: number | null;
+  absBasisPct?: number | null;
+  spotSpreadPct?: number | null;
+  futuresSpreadPct?: number | null;
+  spreadGapPct?: number | null;
+  spotDepthNotional?: number | null;
+  futuresDepthNotional?: number | null;
+  depthNotionalRatio?: number | null;
+  spotImbalance?: number | null;
+  futuresImbalance?: number | null;
+  imbalanceGap?: number | null;
+  qualityStatus?: string;
+  qualityNotes?: string[];
   status: string;
   message: string;
 };

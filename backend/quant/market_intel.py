@@ -603,13 +603,42 @@ def _basis_metrics(venues: Dict[str, Any]) -> Dict[str, Any]:
     futures_ob = venues.get("futures", {}).get("orderbook") if isinstance(venues.get("futures"), dict) else None
     spot_mid = _to_float(spot_ob.get("mid")) if isinstance(spot_ob, dict) else 0.0
     futures_mid = _to_float(futures_ob.get("mid")) if isinstance(futures_ob, dict) else 0.0
+    spot_depth = (_to_float(spot_ob.get("bidNotional")) + _to_float(spot_ob.get("askNotional"))) if isinstance(spot_ob, dict) else 0.0
+    futures_depth = (_to_float(futures_ob.get("bidNotional")) + _to_float(futures_ob.get("askNotional"))) if isinstance(futures_ob, dict) else 0.0
+    spot_spread_pct = _to_float(spot_ob.get("spreadPct")) if isinstance(spot_ob, dict) else 0.0
+    futures_spread_pct = _to_float(futures_ob.get("spreadPct")) if isinstance(futures_ob, dict) else 0.0
+    spot_imbalance = _to_float(spot_ob.get("imbalance")) if isinstance(spot_ob, dict) else 0.0
+    futures_imbalance = _to_float(futures_ob.get("imbalance")) if isinstance(futures_ob, dict) else 0.0
     basis = futures_mid - spot_mid if spot_mid > 0 and futures_mid > 0 else 0.0
+    basis_pct = basis / spot_mid if spot_mid > 0 and futures_mid > 0 else None
+    depth_ratio = futures_depth / spot_depth if spot_depth > 0 and futures_depth > 0 else None
+    spread_gap_pct = futures_spread_pct - spot_spread_pct if spot_mid > 0 and futures_mid > 0 else None
+    imbalance_gap = futures_imbalance - spot_imbalance if spot_mid > 0 and futures_mid > 0 else None
+    quality_notes: List[str] = []
+    if spot_spread_pct > 0.001 or futures_spread_pct > 0.001:
+        quality_notes.append("wide_spread")
+    if depth_ratio is not None and (depth_ratio >= 3.0 or depth_ratio <= 1 / 3):
+        quality_notes.append("depth_mismatch")
+    if imbalance_gap is not None and abs(imbalance_gap) >= 0.3:
+        quality_notes.append("book_skew_mismatch")
     return {
         "ok": spot_mid > 0 and futures_mid > 0,
         "spotMid": spot_mid if spot_mid > 0 else None,
         "futuresMid": futures_mid if futures_mid > 0 else None,
         "basis": basis if spot_mid > 0 and futures_mid > 0 else None,
-        "basisPct": basis / spot_mid if spot_mid > 0 and futures_mid > 0 else None,
+        "basisPct": basis_pct,
+        "absBasisPct": abs(basis_pct) if basis_pct is not None else None,
+        "spotSpreadPct": spot_spread_pct if spot_mid > 0 else None,
+        "futuresSpreadPct": futures_spread_pct if futures_mid > 0 else None,
+        "spreadGapPct": spread_gap_pct,
+        "spotDepthNotional": spot_depth if spot_depth > 0 else None,
+        "futuresDepthNotional": futures_depth if futures_depth > 0 else None,
+        "depthNotionalRatio": depth_ratio,
+        "spotImbalance": spot_imbalance if spot_mid > 0 else None,
+        "futuresImbalance": futures_imbalance if futures_mid > 0 else None,
+        "imbalanceGap": imbalance_gap,
+        "qualityStatus": "watch" if quality_notes else "ok",
+        "qualityNotes": quality_notes,
         "status": "ok" if spot_mid > 0 and futures_mid > 0 else "insufficient_data",
         "message": "Spot-futures basis is computed from public Spot and USD-M futures mid prices.",
     }

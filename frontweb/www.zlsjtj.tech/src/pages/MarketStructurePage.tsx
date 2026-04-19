@@ -2047,6 +2047,14 @@ function CorrelationHeatmap({ data }: { data?: Array<{ symbol: string; values: R
 function BasisPanel({ basis }: { basis?: MarketIntelBasis }) {
   const basisPct = basis?.basisPct;
   const color = basisPct == null ? undefined : basisPct > 0 ? '#ff4d4f' : basisPct < 0 ? '#1677ff' : '#52c41a';
+  const qualityNotes = basis?.qualityNotes ?? [];
+  const qualityDescriptions = {
+    wide_spread: byLang('Spot 或 Futures 盘口价差偏宽，basis 需要降权观察。', 'Spot or Futures spread is wide, so basis needs lower-weight review.'),
+    depth_mismatch: byLang('Spot 与 Futures 显示深度差异较大，basis 可能受单侧流动性影响。', 'Spot and Futures displayed depth differs materially, so basis may be affected by one-sided liquidity.'),
+    book_skew_mismatch: byLang('Spot 与 Futures 盘口偏斜不一致，期现结构和显示流动性方向不同。', 'Spot and Futures book skew disagree, so basis structure and displayed-liquidity direction differ.'),
+  } as Record<string, string>;
+  const qualityType = basis?.qualityStatus === 'watch' ? 'warning' : 'info';
+  const depthRatioText = basis?.depthNotionalRatio == null ? '-' : `${formatNumber(basis.depthNotionalRatio, 2)}x`;
 
   return (
     <Card title={byLang('期现价差', 'Spot-futures basis')}>
@@ -2062,6 +2070,28 @@ function BasisPanel({ basis }: { basis?: MarketIntelBasis }) {
         />
       ) : (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type={qualityType}
+            showIcon
+            message={basis?.qualityStatus === 'watch' ? byLang('期现价差需要质量复核', 'Basis needs quality review') : byLang('期现价差质量正常', 'Basis quality is normal')}
+            description={
+              <Space direction="vertical" size={2}>
+                <Typography.Text type="secondary">
+                  {byLang(
+                    '质量复核合并 Spot/Futures 价差、显示深度比例和盘口偏斜差异；basis 只用于监测期现结构。',
+                    'Quality review combines Spot/Futures spreads, displayed-depth ratio and book-skew gap; basis is only for monitoring spot-futures structure.',
+                  )}
+                </Typography.Text>
+                {qualityNotes.length === 0 ? (
+                  <Typography.Text type="secondary">{byLang('当前未触发主要质量降权条件。', 'No major lower-weight condition is active right now.')}</Typography.Text>
+                ) : (
+                  qualityNotes.map((note) => (
+                    <Typography.Text key={note} type="secondary">{qualityDescriptions[note] ?? note}</Typography.Text>
+                  ))
+                )}
+              </Space>
+            }
+          />
           <Row gutter={[12, 12]}>
             <Col xs={12} md={6}>
               <Statistic title="Spot Mid" value={basis.spotMid ?? 0} precision={2} />
@@ -2075,7 +2105,39 @@ function BasisPanel({ basis }: { basis?: MarketIntelBasis }) {
             <Col xs={12} md={6}>
               <Statistic title={byLang('价差比例', 'Basis pct')} value={basisPct == null ? '-' : signedPercent(basisPct, 3)} valueStyle={{ color }} />
             </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('绝对价差比例', 'Abs basis pct')} value={basis.absBasisPct == null ? '-' : formatPercent(basis.absBasisPct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('Spot 价差', 'Spot spread')} value={basis.spotSpreadPct == null ? '-' : formatPercent(basis.spotSpreadPct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('Futures 价差', 'Futures spread')} value={basis.futuresSpreadPct == null ? '-' : formatPercent(basis.futuresSpreadPct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('价差差值', 'Spread gap')} value={basis.spreadGapPct == null ? '-' : signedPercent(basis.spreadGapPct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('深度比例', 'Depth ratio')} value={depthRatioText} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('Spot 深度', 'Spot depth')} value={basis.spotDepthNotional == null ? '-' : formatNumber(basis.spotDepthNotional, 0)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('Futures 深度', 'Futures depth')} value={basis.futuresDepthNotional == null ? '-' : formatNumber(basis.futuresDepthNotional, 0)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('盘口偏斜差值', 'Book skew gap')} value={basis.imbalanceGap == null ? '-' : signedPercent(basis.imbalanceGap)} valueStyle={{ color: basis.imbalanceGap == null ? undefined : barColor(basis.imbalanceGap) }} />
+            </Col>
           </Row>
+          <Space wrap>
+            <Tag color={basis.qualityStatus === 'watch' ? 'gold' : 'green'}>
+              {basis.qualityStatus === 'watch' ? byLang('质量观察', 'Quality watch') : byLang('质量正常', 'Quality normal')}
+            </Tag>
+            <Tag>Spot skew: {signedPercent(basis.spotImbalance)}</Tag>
+            <Tag>Futures skew: {signedPercent(basis.futuresImbalance)}</Tag>
+            <Tag>{byLang('深度比例', 'Depth ratio')}: {depthRatioText}</Tag>
+          </Space>
           <Progress
             percent={Math.min(100, Math.round(Math.abs(basisPct ?? 0) * 5000))}
             showInfo={false}
