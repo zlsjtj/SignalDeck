@@ -301,6 +301,11 @@ export type MarketIntelDerivatives = {
     period: string;
     latest: number | null;
     changePct: number | null;
+    totalChangePct?: number | null;
+    avgAbsChangePct?: number | null;
+    maxAbsChangePct?: number | null;
+    latestOpenInterestValue?: number | null;
+    pointCount?: number;
     points: Array<{
       ts: string;
       openInterest: number;

@@ -2156,7 +2156,7 @@ function BasisPanel({ basis }: { basis?: MarketIntelBasis }) {
 }
 
 function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
-  const windows = venue?.derivatives?.openInterestWindows ?? [];
+  const windows = useMemo(() => venue?.derivatives?.openInterestWindows ?? [], [venue?.derivatives?.openInterestWindows]);
   const [period, setPeriod] = useState<OiPeriod>('15m');
   const selected = windows.find((item) => item.period === period) ?? windows[0];
   const points = useMemo(() => selected?.points ?? [], [selected]);
@@ -2165,6 +2165,22 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const latestChange = selected?.changePct ?? latestPoint?.changePct ?? null;
   const latestOpenInterestValue = latestPoint?.openInterestValue ?? null;
   const fundingRate = venue?.derivatives?.fundingRate;
+  const windowRows = useMemo(() => windows.map((item) => ({
+    ...item,
+    key: item.period,
+    pointCount: item.pointCount ?? item.points.length,
+    latestOpenInterestValue: item.latestOpenInterestValue ?? item.points.at(-1)?.openInterestValue ?? null,
+  })), [windows]);
+  const strongestOiWindow = useMemo(() => [...windowRows]
+    .filter((item) => item.totalChangePct != null)
+    .sort((a, b) => Math.abs(b.totalChangePct ?? 0) - Math.abs(a.totalChangePct ?? 0))[0], [windowRows]);
+  const mostVolatileOiWindow = useMemo(() => [...windowRows]
+    .filter((item) => item.maxAbsChangePct != null)
+    .sort((a, b) => (b.maxAbsChangePct ?? 0) - (a.maxAbsChangePct ?? 0))[0], [windowRows]);
+  const minOiPointCount = windowRows.length > 0 ? Math.min(...windowRows.map((item) => item.pointCount)) : 0;
+  const oiCoverageThin = windowRows.length > 0 && minOiPointCount < 12;
+  const oiWatch = (strongestOiWindow?.totalChangePct != null && Math.abs(strongestOiWindow.totalChangePct) >= 0.03)
+    || (mostVolatileOiWindow?.maxAbsChangePct != null && mostVolatileOiWindow.maxAbsChangePct >= 0.015);
   const option = useMemo(() => {
     return {
       backgroundColor: 'transparent',
@@ -2237,6 +2253,15 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
           <Empty description={byLang('暂无持仓量历史数据', 'No open interest history yet')} />
         ) : (
           <>
+            <Alert
+              type={oiWatch || oiCoverageThin ? 'warning' : 'info'}
+              showIcon
+              message={oiWatch ? byLang('持仓量窗口出现明显变化', 'Open-interest windows show notable change') : byLang('持仓量窗口处于监测状态', 'Open-interest windows are in monitoring state')}
+              description={byLang(
+                '周期对比只描述合约持仓规模变化；OI 变化不能直接说明多空方向，需要结合 funding、basis、成交和盘口一起观察。',
+                'Window comparison only describes futures positioning-size changes; OI changes do not directly identify long or short direction and should be reviewed with funding, basis, flow and book context.',
+              )}
+            />
             <Row gutter={[12, 12]}>
               <Col xs={12} md={8} xl={4}>
                 <Statistic title={byLang('当前周期', 'Period')} value={selected?.period ?? period} />
@@ -2260,7 +2285,26 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
               <Col xs={12} md={8} xl={4}>
                 <Statistic title={byLang('资金费率', 'Funding')} value={fundingRate == null ? '-' : formatPercent(fundingRate, 4)} />
               </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('当前周期总变化', 'Period total change')} value={selected?.totalChangePct == null ? '-' : signedPercent(selected.totalChangePct, 3)} valueStyle={{ color: selected?.totalChangePct == null ? undefined : barColor(selected.totalChangePct) }} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('当前周期最大单点', 'Period max move')} value={selected?.maxAbsChangePct == null ? '-' : formatPercent(selected.maxAbsChangePct, 3)} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('最强变化周期', 'Strongest window')} value={strongestOiWindow ? `${strongestOiWindow.period} ${signedPercent(strongestOiWindow.totalChangePct, 3)}` : '-'} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('最高波动周期', 'Most volatile window')} value={mostVolatileOiWindow ? `${mostVolatileOiWindow.period} ${formatPercent(mostVolatileOiWindow.maxAbsChangePct ?? 0, 3)}` : '-'} />
+              </Col>
             </Row>
+            <Space wrap>
+              <Tag color={oiCoverageThin ? 'gold' : 'green'}>
+                {oiCoverageThin ? byLang('样本偏薄', 'Thin samples') : byLang('样本覆盖正常', 'Coverage normal')}
+              </Tag>
+              <Tag>{byLang('最少点数', 'Min points')}: {minOiPointCount}</Tag>
+              <Tag>{byLang('周期数', 'Windows')}: {windowRows.length}</Tag>
+            </Space>
             <Typography.Text type="secondary">
               {byLang(
                 'OI 上升或下降只表示合约持仓规模变化，不能直接说明多空方向。',
@@ -2271,12 +2315,16 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             <Table
               size="small"
               pagination={false}
-              dataSource={windows.map((item) => ({ ...item, key: item.period }))}
+              dataSource={windowRows}
               columns={[
                 { title: byLang('周期', 'Period'), dataIndex: 'period' },
                 { title: byLang('最新持仓量', 'Latest OI'), dataIndex: 'latest', render: (v: number | null) => v == null ? '-' : formatNumber(v, 2) },
                 { title: byLang('最近变化', 'Latest change'), dataIndex: 'changePct', render: (v: number | null) => v == null ? '-' : signedPercent(v, 3) },
-                { title: byLang('样本', 'Samples'), dataIndex: 'points', render: (v: unknown[]) => v.length },
+                { title: byLang('总变化', 'Total change'), dataIndex: 'totalChangePct', render: (v: number | null) => v == null ? '-' : signedPercent(v, 3) },
+                { title: byLang('平均绝对变化', 'Avg abs change'), dataIndex: 'avgAbsChangePct', responsive: ['md'], render: (v: number | null) => v == null ? '-' : formatPercent(v, 3) },
+                { title: byLang('最大单点变化', 'Max point change'), dataIndex: 'maxAbsChangePct', responsive: ['md'], render: (v: number | null) => v == null ? '-' : formatPercent(v, 3) },
+                { title: byLang('最新名义价值', 'Latest notional'), dataIndex: 'latestOpenInterestValue', responsive: ['lg'], render: (v: number | null) => v == null ? '-' : formatNumber(v, 0) },
+                { title: byLang('样本', 'Samples'), dataIndex: 'pointCount' },
               ]}
             />
           </>

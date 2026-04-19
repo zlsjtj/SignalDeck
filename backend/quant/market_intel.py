@@ -419,13 +419,22 @@ def _fetch_futures_derivatives(symbol: str, interval: str) -> Dict[str, Any]:
                 )
             latest = points[-1] if points else {}
             previous = points[-2] if len(points) > 1 else {}
+            first = points[0] if points else {}
             latest_oi = _to_float(latest.get("openInterest"))
             previous_oi = _to_float(previous.get("openInterest"))
+            first_oi = _to_float(first.get("openInterest"))
+            changes = [_to_float(point.get("changePct"), float("nan")) for point in points if point.get("changePct") is not None]
+            changes = [value for value in changes if math.isfinite(value)]
             out["openInterestWindows"].append(
                 {
                     "period": oi_period,
                     "latest": latest_oi if latest_oi > 0 else None,
                     "changePct": latest_oi / previous_oi - 1.0 if latest_oi > 0 and previous_oi > 0 else None,
+                    "totalChangePct": latest_oi / first_oi - 1.0 if latest_oi > 0 and first_oi > 0 else None,
+                    "avgAbsChangePct": sum(abs(value) for value in changes) / len(changes) if changes else None,
+                    "maxAbsChangePct": max((abs(value) for value in changes), default=None),
+                    "latestOpenInterestValue": latest.get("openInterestValue"),
+                    "pointCount": len(points),
                     "points": points,
                 }
             )
