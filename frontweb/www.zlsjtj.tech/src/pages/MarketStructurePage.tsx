@@ -148,6 +148,11 @@ function timezoneLabel(timezone: SessionTimezone) {
   return timezone === 'asia-shanghai' ? 'Asia/Shanghai' : 'UTC';
 }
 
+function displayNullableHour(hourUtc: number | null | undefined, timezone: SessionTimezone) {
+  if (hourUtc === null || hourUtc === undefined) return '-';
+  return `${String(displayHour(hourUtc, timezone)).padStart(2, '0')}:00`;
+}
+
 function lookbackLabel(bars: number) {
   const hours = Math.round((bars * 15) / 60);
   if (hours < 24) return byLang(`${hours} 小时`, `${hours}h`);
@@ -1455,15 +1460,15 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const totalBid = ob?.bidNotional ?? 0;
   const totalAsk = ob?.askNotional ?? 0;
   const totalDepth = totalBid + totalAsk;
-  const topBidShare = totalBid > 0 ? (ob?.bids?.[0]?.notional ?? 0) / totalBid : 0;
-  const topAskShare = totalAsk > 0 ? (ob?.asks?.[0]?.notional ?? 0) / totalAsk : 0;
+  const topBidShare = ob?.topBidShare ?? (totalBid > 0 ? (ob?.bids?.[0]?.notional ?? 0) / totalBid : 0);
+  const topAskShare = ob?.topAskShare ?? (totalAsk > 0 ? (ob?.asks?.[0]?.notional ?? 0) / totalAsk : 0);
   const depthImbalance = ob?.imbalance ?? 0;
-  const nearBid = (ob?.bids ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
-  const nearAsk = (ob?.asks ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
+  const nearBid = ob?.top3BidNotional ?? (ob?.bids ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
+  const nearAsk = ob?.top3AskNotional ?? (ob?.asks ?? []).slice(0, 3).reduce((sum, level) => sum + level.notional, 0);
   const nearDepth = nearBid + nearAsk;
-  const nearDepthImbalance = nearDepth > 0 ? (nearBid - nearAsk) / nearDepth : 0;
-  const nearDepthShare = totalDepth > 0 ? nearDepth / totalDepth : 0;
-  const topConcentration = Math.max(topBidShare, topAskShare);
+  const nearDepthImbalance = ob?.top3Imbalance ?? (nearDepth > 0 ? (nearBid - nearAsk) / nearDepth : 0);
+  const nearDepthShare = ob?.top3Share ?? (totalDepth > 0 ? nearDepth / totalDepth : 0);
+  const topConcentration = ob?.topConcentration ?? Math.max(topBidShare, topAskShare);
   const nearFullSkewGap = nearDepthImbalance - depthImbalance;
   const snapshotFreshnessSeconds = ageSeconds(orderbookTimestamp(ob, streamBook));
   const qualityWarnings = [
@@ -2283,6 +2288,80 @@ function SessionHeatmap({
         <Empty description={byLang('样本不足，暂不展示时间段热力图', 'Not enough samples for the session heatmap yet')} />
       ) : (
         <ReactECharts option={option} style={{ height: 260 }} notMerge lazyUpdate />
+      )}
+    </Card>
+  );
+}
+
+function SessionDistributionPanel({
+  venue,
+  timezone,
+  lookbackBars,
+}: {
+  venue?: MarketIntelVenueSnapshot;
+  timezone: SessionTimezone;
+  lookbackBars: number;
+}) {
+  const summary = venue?.sessionSummary;
+  const count = summary?.count ?? 0;
+  const coverageRatio = summary?.coverageRatio ?? 0;
+  const sparse = summary?.sparse ?? count < Math.min(96, lookbackBars * 0.6);
+  const activeHour = displayNullableHour(summary?.activeHourUtc, timezone);
+  const volatileHour = displayNullableHour(summary?.highAbsReturnHourUtc, timezone);
+  const qualityScore = Math.round((
+    Math.min(1, coverageRatio) * 0.45
+    + Math.min(1, count / Math.max(96, lookbackBars * 0.5)) * 0.35
+    + (sparse ? 0 : 1) * 0.2
+  ) * 100);
+
+  return (
+    <Card title={byLang('时间结构样本质量', 'Session sample quality')}>
+      {count === 0 ? (
+        <Empty description={byLang('等待 K 线样本生成时间结构摘要', 'Waiting for kline samples to build the session summary')} />
+      ) : (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type={sparse ? 'warning' : 'info'}
+            showIcon
+            message={sparse ? byLang('时间结构需要降权解读', 'Session structure needs lower weight') : byLang('时间结构样本可用于监测', 'Session structure is usable for monitoring')}
+            description={byLang(
+              '摘要合并样本覆盖、收益波动、正收益占比和活跃小时；只描述历史分布，不构成交易建议。',
+              'The summary combines sample coverage, return volatility, positive-return ratio and active hours; it only describes historical distribution and is not trading advice.',
+            )}
+          />
+          <Row gutter={[12, 12]}>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('质量分', 'Quality score')} value={`${qualityScore}%`} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('有效样本', 'Covered bars')} value={count} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('覆盖比例', 'Coverage')} value={formatPercent(coverageRatio)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('正收益占比', 'Positive ratio')} value={summary?.positiveRatio == null ? '-' : formatPercent(summary.positiveRatio)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('均值收益', 'Avg return')} value={signedPercent(summary?.avgReturnPct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('平均绝对波动', 'Avg abs move')} value={summary?.avgAbsReturnPct == null ? '-' : formatPercent(summary.avgAbsReturnPct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('收益标准差', 'Return stdev')} value={summary?.returnStdPct == null ? '-' : formatPercent(summary.returnStdPct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('成交量标准差', 'Volume stdev')} value={formatNumber(summary?.volumeStd ?? 0, 2)} />
+            </Col>
+          </Row>
+          <Space wrap>
+            <Tag>{byLang('最活跃小时', 'Most active hour')}: {activeHour} {timezoneLabel(timezone)}</Tag>
+            <Tag>{byLang('最高波动小时', 'Highest-move hour')}: {volatileHour} {timezoneLabel(timezone)}</Tag>
+            <Tag color={sparse ? 'gold' : 'green'}>{sparse ? byLang('样本偏薄', 'Thin sample') : byLang('覆盖正常', 'Coverage normal')}</Tag>
+            <Tag>{byLang('目标样本', 'Target bars')}: {summary?.targetBars ?? lookbackBars}</Tag>
+          </Space>
+        </Space>
       )}
     </Card>
   );
@@ -3131,6 +3210,7 @@ export function MarketStructurePage() {
             onChange={(value) => setSessionTimezone(value as SessionTimezone)}
           />
         </Space>
+        <SessionDistributionPanel venue={selectedVenue} timezone={sessionTimezone} lookbackBars={data?.lookbackBars ?? lookbackBars} />
         <SessionResearchPanel venue={selectedVenue} timezone={sessionTimezone} lookbackBars={data?.lookbackBars ?? lookbackBars} />
         <Row gutter={[16, 16]}>
           <Col xs={24} xl={10}>

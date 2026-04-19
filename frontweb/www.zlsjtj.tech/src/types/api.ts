@@ -259,6 +259,13 @@ export type MarketIntelOrderbook = {
   bidNotional: number;
   askNotional: number;
   imbalance: number;
+  topBidShare?: number;
+  topAskShare?: number;
+  topConcentration?: number;
+  top3BidNotional?: number;
+  top3AskNotional?: number;
+  top3Share?: number;
+  top3Imbalance?: number;
   lastUpdateId?: number | string;
   fetchedAt?: string;
   ts?: string;
@@ -351,6 +358,22 @@ export type MarketIntelSessionHeatmapCell = {
   avgVolume: number;
 };
 
+export type MarketIntelSessionSummary = {
+  count: number;
+  targetBars: number;
+  coverageRatio: number;
+  avgReturnPct: number;
+  avgAbsReturnPct: number;
+  returnStdPct: number;
+  positiveRatio: number | null;
+  avgVolume: number;
+  volumeStd: number;
+  activeHourUtc: number | null;
+  highAbsReturnHourUtc: number | null;
+  sparse: boolean;
+  message: string;
+};
+
 export type MarketIntelVenueSnapshot = {
   venue: MarketIntelVenue;
   symbol: string;
@@ -363,6 +386,7 @@ export type MarketIntelVenueSnapshot = {
   volumeRatio: number;
   sessionEffect: MarketIntelSessionEffect[];
   sessionHeatmap?: MarketIntelSessionHeatmapCell[];
+  sessionSummary?: MarketIntelSessionSummary | null;
   derivatives: MarketIntelDerivatives | null;
   stream?: MarketIntelVenueStream;
 };

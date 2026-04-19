@@ -119,6 +119,11 @@ def _orderbook_metrics(data: Dict[str, Any], venue: str) -> Dict[str, Any]:
     spread = best_ask - best_bid if best_bid > 0 and best_ask > 0 else 0.0
     denom = bid_notional + ask_notional
     imbalance = (bid_notional - ask_notional) / denom if denom > 0 else 0.0
+    top_bid_notional = bids[0]["notional"] if bids else 0.0
+    top_ask_notional = asks[0]["notional"] if asks else 0.0
+    top3_bid_notional = sum(x["notional"] for x in bids[:3])
+    top3_ask_notional = sum(x["notional"] for x in asks[:3])
+    top3_total = top3_bid_notional + top3_ask_notional
     return {
         "bids": bids,
         "asks": asks,
@@ -130,6 +135,16 @@ def _orderbook_metrics(data: Dict[str, Any], venue: str) -> Dict[str, Any]:
         "bidNotional": bid_notional,
         "askNotional": ask_notional,
         "imbalance": imbalance,
+        "topBidShare": top_bid_notional / bid_notional if bid_notional > 0 else 0.0,
+        "topAskShare": top_ask_notional / ask_notional if ask_notional > 0 else 0.0,
+        "topConcentration": max(
+            top_bid_notional / bid_notional if bid_notional > 0 else 0.0,
+            top_ask_notional / ask_notional if ask_notional > 0 else 0.0,
+        ),
+        "top3BidNotional": top3_bid_notional,
+        "top3AskNotional": top3_ask_notional,
+        "top3Share": top3_total / denom if denom > 0 else 0.0,
+        "top3Imbalance": (top3_bid_notional - top3_ask_notional) / top3_total if top3_total > 0 else 0.0,
         "lastUpdateId": data.get("lastUpdateId"),
         "venue": venue,
     }
@@ -251,6 +266,54 @@ def _session_effect(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+def _session_distribution(rows: List[Dict[str, Any]], target_bars: int) -> Dict[str, Any]:
+    valid_rows = [row for row in rows if _to_float(row.get("close")) > 0]
+    returns = [_to_float(row.get("returnPct")) for row in valid_rows]
+    volumes = [_to_float(row.get("volume")) for row in valid_rows]
+    count = len(valid_rows)
+    if count <= 0:
+        return {
+            "count": 0,
+            "targetBars": target_bars,
+            "coverageRatio": 0.0,
+            "avgReturnPct": 0.0,
+            "avgAbsReturnPct": 0.0,
+            "returnStdPct": 0.0,
+            "positiveRatio": None,
+            "avgVolume": 0.0,
+            "volumeStd": 0.0,
+            "activeHourUtc": None,
+            "highAbsReturnHourUtc": None,
+            "sparse": True,
+            "message": "Session distribution is unavailable until kline samples are collected.",
+        }
+
+    avg_return = sum(returns) / count
+    avg_abs_return = sum(abs(value) for value in returns) / count
+    return_var = sum((value - avg_return) ** 2 for value in returns) / count
+    avg_volume = sum(volumes) / count
+    volume_var = sum((value - avg_volume) ** 2 for value in volumes) / count
+    hourly = _session_effect(valid_rows)
+    active_hour = max(hourly, key=lambda item: _to_float(item.get("avgVolume")), default={}).get("hourUtc")
+    high_abs_hour = max(hourly, key=lambda item: abs(_to_float(item.get("avgReturnPct"))), default={}).get("hourUtc")
+    coverage = min(1.0, count / max(1, int(target_bars)))
+    return {
+        "count": count,
+        "targetBars": int(target_bars),
+        "coverageRatio": coverage,
+        "avgReturnPct": avg_return,
+        "avgAbsReturnPct": avg_abs_return,
+        "returnStdPct": math.sqrt(return_var),
+        "positiveRatio": sum(1 for value in returns if value > 0) / count,
+        "avgVolume": avg_volume,
+        "volumeStd": math.sqrt(volume_var),
+        "activeHourUtc": active_hour if active_hour is not None else None,
+        "highAbsReturnHourUtc": high_abs_hour if high_abs_hour is not None else None,
+        "sparse": coverage < 0.6 or count < 96,
+        "message": "Session distribution uses public kline samples and is monitoring context, not trading advice.",
+    }
 
 
 def _session_heatmap(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -965,6 +1028,7 @@ def build_market_intel_summary(
             "volumeRatio": 0.0,
             "sessionEffect": [],
             "sessionHeatmap": [],
+            "sessionSummary": None,
             "derivatives": None,
         }
 
@@ -984,6 +1048,7 @@ def build_market_intel_summary(
             venue_payload["volumeRatio"] = _volume_ratio(rows)
             venue_payload["sessionEffect"] = _session_effect(rows)
             venue_payload["sessionHeatmap"] = _session_heatmap(rows)
+            venue_payload["sessionSummary"] = _session_distribution(rows, lookback_bars)
         except Exception as exc:
             source_errors.append(f"klines: {exc}")
 
