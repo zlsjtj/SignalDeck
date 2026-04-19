@@ -12,6 +12,7 @@ import type {
   MarketIntelLevel,
   MarketIntelLiquidation,
   MarketIntelLiquidationAggregate,
+  MarketIntelOrderbook,
   MarketIntelRollingCorrelation,
   MarketIntelSessionHeatmapCell,
   MarketIntelStreamStatus,
@@ -108,6 +109,13 @@ function freshnessText(ts?: string) {
   return seconds < 60
     ? byLang(`${seconds} 秒前`, `${seconds}s ago`)
     : byLang(`${Math.round(seconds / 60)} 分钟前`, `${Math.round(seconds / 60)}m ago`);
+}
+
+function orderbookFreshnessText(book?: MarketIntelOrderbook | null, streamBook?: MarketIntelOrderbook) {
+  const ts = streamBook?.fetchedAt || streamBook?.ts || book?.fetchedAt || book?.ts;
+  if (ts) return freshnessText(ts);
+  if (book?.lastUpdateId || streamBook?.lastUpdateId) return byLang('有快照，缺少时间戳', 'Snapshot, no timestamp');
+  return byLang('等待订单薄', 'Waiting for book');
 }
 
 function metricLabel(metric: PressureMetric) {
@@ -877,6 +885,7 @@ function MicrostructureFocusPanel({
   const streamFlow = venue?.stream?.flow;
   const ofi = venue?.stream?.ofi;
   const book = venue?.orderbook;
+  const streamBook = venue?.stream?.orderbook;
   const liveFlowSeries = useMemo(() => streamFlow?.series ?? [], [streamFlow?.series]);
   const ofiSeries = useMemo(() => ofi?.series ?? [], [ofi?.series]);
   const timestamps = useMemo(() => Array.from(new Set([...liveFlowSeries.map((point) => point.ts), ...ofiSeries.map((point) => point.ts)])).sort(), [liveFlowSeries, ofiSeries]);
@@ -937,7 +946,7 @@ function MicrostructureFocusPanel({
       current: book ? signedPercent(book.imbalance) : '-',
       sample: book ? (book.bids.length + book.asks.length) : '-',
       notional: book ? formatNumber((book.bidNotional ?? 0) + (book.askNotional ?? 0), 0) : '-',
-      freshness: venue?.stream?.orderbook?.lastUpdateId ? String(venue.stream.orderbook.lastUpdateId) : byLang('快照', 'snapshot'),
+      freshness: orderbookFreshnessText(book, streamBook),
       role: byLang('静态显示深度', 'Displayed depth snapshot'),
     },
     {
@@ -1309,6 +1318,7 @@ function VenueCard({
 
 function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const ob = venue?.orderbook;
+  const streamBook = venue?.stream?.orderbook;
   const rows = useMemo(() => {
     const bids = ob?.bids ?? [];
     const asks = ob?.asks ?? [];
@@ -1463,6 +1473,7 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
         <Space wrap>
           <Typography.Text>{byLang('主视角 Level 2 订单薄', 'Primary Level 2 order book')}</Typography.Text>
           {venue ? <Tag>{venue.venue === 'spot' ? 'Spot' : 'Futures'}</Tag> : null}
+          <Tag>{byLang('新鲜度', 'Freshness')}: {orderbookFreshnessText(ob, streamBook)}</Tag>
         </Space>
       }
     >
@@ -1494,6 +1505,12 @@ function OrderbookTable({ venue }: { venue?: MarketIntelVenueSnapshot }) {
             </Col>
             <Col xs={12} md={6}>
               <Statistic title={byLang('挂单墙距离', 'Wall distance')} value={largestWall?.distancePct == null ? '-' : signedPercent(largestWall.distancePct, 3)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('快照新鲜度', 'Snapshot freshness')} value={orderbookFreshnessText(ob, streamBook)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('档位数', 'Book levels')} value={(ob?.bids?.length ?? 0) + (ob?.asks?.length ?? 0)} />
             </Col>
           </Row>
           <div>

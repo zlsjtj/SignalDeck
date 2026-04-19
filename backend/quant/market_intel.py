@@ -103,7 +103,9 @@ def _klines_endpoint(venue: str) -> Tuple[str, str]:
 def _fetch_depth(venue: str, symbol: str, limit: int) -> Dict[str, Any]:
     base, path = _depth_endpoint(venue)
     data = _http_get_json(base, path, {"symbol": symbol, "limit": limit})
-    return _orderbook_metrics(data, venue=venue)
+    metrics = _orderbook_metrics(data, venue=venue)
+    metrics["fetchedAt"] = _now_iso()
+    return metrics
 
 
 def _orderbook_metrics(data: Dict[str, Any], venue: str) -> Dict[str, Any]:
@@ -653,6 +655,7 @@ def _record_depth_event(venue: str, symbol: str, payload: Dict[str, Any]) -> Non
     metrics["symbol"] = _ccxt_symbol(symbol, venue)
     metrics["binanceSymbol"] = symbol
     metrics["ts"] = _now_iso()
+    metrics["fetchedAt"] = metrics["ts"]
     metrics["eventTimeMs"] = int(_to_float(payload.get("E") or payload.get("T"), time.time() * 1000))
 
     with _STREAM_LOCK:

@@ -260,6 +260,9 @@ export type MarketIntelOrderbook = {
   askNotional: number;
   imbalance: number;
   lastUpdateId?: number | string;
+  fetchedAt?: string;
+  ts?: string;
+  eventTimeMs?: number;
 };
 
 export type MarketIntelFlow = {
