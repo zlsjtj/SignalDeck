@@ -363,6 +363,11 @@ def _fetch_futures_derivatives(symbol: str, interval: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "fundingRate": None,
         "fundingTime": "",
+        "nextFundingTime": "",
+        "markPrice": None,
+        "indexPrice": None,
+        "markIndexPremiumPct": None,
+        "premiumUpdatedAt": "",
         "openInterest": None,
         "openInterestChangePct": None,
         "openInterestWindows": [],
@@ -378,6 +383,24 @@ def _fetch_futures_derivatives(symbol: str, interval: str) -> Dict[str, Any]:
             out["fundingTime"] = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).isoformat() if ts_ms > 0 else ""
     except Exception as exc:
         out["errors"].append(f"funding: {exc}")
+
+    try:
+        premium = _http_get_json(FUTURES_BASE_URL, "/fapi/v1/premiumIndex", {"symbol": symbol})
+        if isinstance(premium, dict):
+            mark_price = _to_float(premium.get("markPrice"))
+            index_price = _to_float(premium.get("indexPrice"))
+            premium_funding = _to_float(premium.get("lastFundingRate"), float("nan"))
+            next_funding_ms = int(_to_float(premium.get("nextFundingTime"), 0.0))
+            premium_ts_ms = int(_to_float(premium.get("time"), 0.0))
+            out["markPrice"] = mark_price if mark_price > 0 else None
+            out["indexPrice"] = index_price if index_price > 0 else None
+            out["markIndexPremiumPct"] = mark_price / index_price - 1.0 if mark_price > 0 and index_price > 0 else None
+            if math.isfinite(premium_funding):
+                out["fundingRate"] = premium_funding
+            out["nextFundingTime"] = datetime.fromtimestamp(next_funding_ms / 1000.0, tz=timezone.utc).isoformat() if next_funding_ms > 0 else ""
+            out["premiumUpdatedAt"] = datetime.fromtimestamp(premium_ts_ms / 1000.0, tz=timezone.utc).isoformat() if premium_ts_ms > 0 else ""
+    except Exception as exc:
+        out["errors"].append(f"premiumIndex: {exc}")
 
     period = _binance_period(interval)
     try:

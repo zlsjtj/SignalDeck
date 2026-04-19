@@ -295,6 +295,11 @@ export type MarketIntelFlow = {
 export type MarketIntelDerivatives = {
   fundingRate: number | null;
   fundingTime: string;
+  nextFundingTime?: string;
+  markPrice?: number | null;
+  indexPrice?: number | null;
+  markIndexPremiumPct?: number | null;
+  premiumUpdatedAt?: string;
   openInterest: number | null;
   openInterestChangePct: number | null;
   openInterestWindows?: Array<{

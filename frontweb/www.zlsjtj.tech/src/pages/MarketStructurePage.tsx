@@ -119,6 +119,13 @@ function durationText(seconds?: number | null) {
   return byLang(`${formatNumber(seconds / 3600, 1)} 小时`, `${formatNumber(seconds / 3600, 1)}h`);
 }
 
+function futureCountdownText(ts?: string) {
+  if (!ts) return '-';
+  const parsed = Date.parse(ts);
+  if (!Number.isFinite(parsed)) return '-';
+  return durationText(Math.max(0, Math.round((parsed - Date.now()) / 1000)));
+}
+
 function ageSeconds(ts?: string) {
   if (!ts) return null;
   const parsed = Date.parse(ts);
@@ -2164,7 +2171,10 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const latestOpenInterest = selected?.latest ?? latestPoint?.openInterest ?? null;
   const latestChange = selected?.changePct ?? latestPoint?.changePct ?? null;
   const latestOpenInterestValue = latestPoint?.openInterestValue ?? null;
-  const fundingRate = venue?.derivatives?.fundingRate;
+  const derivatives = venue?.derivatives;
+  const fundingRate = derivatives?.fundingRate;
+  const markIndexPremiumPct = derivatives?.markIndexPremiumPct ?? null;
+  const nextFundingText = futureCountdownText(derivatives?.nextFundingTime);
   const windowRows = useMemo(() => windows.map((item) => ({
     ...item,
     key: item.period,
@@ -2181,6 +2191,8 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
   const oiCoverageThin = windowRows.length > 0 && minOiPointCount < 12;
   const oiWatch = (strongestOiWindow?.totalChangePct != null && Math.abs(strongestOiWindow.totalChangePct) >= 0.03)
     || (mostVolatileOiWindow?.maxAbsChangePct != null && mostVolatileOiWindow.maxAbsChangePct >= 0.015);
+  const fundingWatch = (fundingRate != null && Math.abs(fundingRate) >= 0.0005)
+    || (markIndexPremiumPct != null && Math.abs(markIndexPremiumPct) >= 0.001);
   const option = useMemo(() => {
     return {
       backgroundColor: 'transparent',
@@ -2254,9 +2266,9 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
         ) : (
           <>
             <Alert
-              type={oiWatch || oiCoverageThin ? 'warning' : 'info'}
+              type={oiWatch || oiCoverageThin || fundingWatch ? 'warning' : 'info'}
               showIcon
-              message={oiWatch ? byLang('持仓量窗口出现明显变化', 'Open-interest windows show notable change') : byLang('持仓量窗口处于监测状态', 'Open-interest windows are in monitoring state')}
+              message={oiWatch ? byLang('持仓量窗口出现明显变化', 'Open-interest windows show notable change') : fundingWatch ? byLang('Funding / 标记价需要复核', 'Funding / mark price needs review') : byLang('持仓量窗口处于监测状态', 'Open-interest windows are in monitoring state')}
               description={byLang(
                 '周期对比只描述合约持仓规模变化；OI 变化不能直接说明多空方向，需要结合 funding、basis、成交和盘口一起观察。',
                 'Window comparison only describes futures positioning-size changes; OI changes do not directly identify long or short direction and should be reviewed with funding, basis, flow and book context.',
@@ -2286,6 +2298,18 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
                 <Statistic title={byLang('资金费率', 'Funding')} value={fundingRate == null ? '-' : formatPercent(fundingRate, 4)} />
               </Col>
               <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('下次资金费', 'Next funding')} value={nextFundingText} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('标记价', 'Mark price')} value={derivatives?.markPrice == null ? '-' : formatNumber(derivatives.markPrice, 2)} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('指数价', 'Index price')} value={derivatives?.indexPrice == null ? '-' : formatNumber(derivatives.indexPrice, 2)} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
+                <Statistic title={byLang('标记/指数溢价', 'Mark/index premium')} value={markIndexPremiumPct == null ? '-' : signedPercent(markIndexPremiumPct, 3)} valueStyle={{ color: markIndexPremiumPct == null ? undefined : barColor(markIndexPremiumPct) }} />
+              </Col>
+              <Col xs={12} md={8} xl={4}>
                 <Statistic title={byLang('当前周期总变化', 'Period total change')} value={selected?.totalChangePct == null ? '-' : signedPercent(selected.totalChangePct, 3)} valueStyle={{ color: selected?.totalChangePct == null ? undefined : barColor(selected.totalChangePct) }} />
               </Col>
               <Col xs={12} md={8} xl={4}>
@@ -2304,6 +2328,8 @@ function OpenInterestPanel({ venue }: { venue?: MarketIntelVenueSnapshot }) {
               </Tag>
               <Tag>{byLang('最少点数', 'Min points')}: {minOiPointCount}</Tag>
               <Tag>{byLang('周期数', 'Windows')}: {windowRows.length}</Tag>
+              <Tag color={fundingWatch ? 'gold' : 'green'}>{fundingWatch ? byLang('Funding 观察', 'Funding watch') : byLang('Funding 正常', 'Funding normal')}</Tag>
+              {derivatives?.premiumUpdatedAt ? <Tag>{byLang('溢价更新', 'Premium updated')}: {freshnessText(derivatives.premiumUpdatedAt)}</Tag> : null}
             </Space>
             <Typography.Text type="secondary">
               {byLang(
