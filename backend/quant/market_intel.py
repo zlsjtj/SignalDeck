@@ -882,10 +882,19 @@ def _liquidation_aggregate(rows: List[Dict[str, Any]], now_ms: int) -> Dict[str,
         "short": {"count": 0, "notional": 0.0},
         "unknown": {"count": 0, "notional": 0.0},
     }
-    five_minute: Dict[str, Dict[str, Any]] = {
-        "long": {"count": 0, "notional": 0.0},
-        "short": {"count": 0, "notional": 0.0},
-        "unknown": {"count": 0, "notional": 0.0},
+    window_specs = {"last5m": 5 * 60 * 1000, "last15m": 15 * 60 * 1000, "last60m": 60 * 60 * 1000}
+    windows: Dict[str, Dict[str, Any]] = {
+        name: {
+            "byDirection": {
+                "long": {"count": 0, "notional": 0.0},
+                "short": {"count": 0, "notional": 0.0},
+                "unknown": {"count": 0, "notional": 0.0},
+            },
+            "totalNotional": 0.0,
+            "count": 0,
+            "maxEventNotional": 0.0,
+        }
+        for name in window_specs
     }
     max_event: Optional[Dict[str, Any]] = None
     for row in rows:
@@ -899,21 +908,35 @@ def _liquidation_aggregate(rows: List[Dict[str, Any]], now_ms: int) -> Dict[str,
             ts_ms = int(datetime.fromisoformat(str(row.get("ts")).replace("Z", "+00:00")).timestamp() * 1000)
         except Exception:
             ts_ms = 0
-        if ts_ms > 0 and now_ms - ts_ms <= 5 * 60 * 1000:
-            five_minute[direction]["count"] += 1
-            five_minute[direction]["notional"] += notional
+        for name, window_ms in window_specs.items():
+            if ts_ms > 0 and now_ms - ts_ms <= window_ms:
+                window = windows[name]
+                window["byDirection"][direction]["count"] += 1
+                window["byDirection"][direction]["notional"] += notional
+                window["totalNotional"] += notional
+                window["count"] += 1
+                window["maxEventNotional"] = max(_to_float(window.get("maxEventNotional")), notional)
 
-    five_minute_total = sum(_to_float(item.get("notional")) for item in five_minute.values())
+    normalized_windows: Dict[str, Dict[str, Any]] = {}
+    for name, window in windows.items():
+        total = _to_float(window.get("totalNotional"))
+        max_window_notional = _to_float(window.get("maxEventNotional"))
+        window_minutes = window_specs[name] / 60_000
+        normalized_windows[name] = {
+            "byDirection": window["byDirection"],
+            "longNotionalRatio": window["byDirection"]["long"]["notional"] / total if total > 0 else None,
+            "shortNotionalRatio": window["byDirection"]["short"]["notional"] / total if total > 0 else None,
+            "totalNotional": total,
+            "count": int(window.get("count") or 0),
+            "maxEventNotional": max_window_notional if max_window_notional > 0 else None,
+            "maxEventShare": max_window_notional / total if total > 0 else None,
+            "notionalPerMinute": total / window_minutes if window_minutes > 0 else 0.0,
+            "eventsPerMinute": int(window.get("count") or 0) / window_minutes if window_minutes > 0 else 0.0,
+        }
     return {
         "byDirection": by_direction,
         "maxEvent": dict(max_event) if max_event else None,
-        "last5m": {
-            "byDirection": five_minute,
-            "longNotionalRatio": five_minute["long"]["notional"] / five_minute_total if five_minute_total > 0 else None,
-            "shortNotionalRatio": five_minute["short"]["notional"] / five_minute_total if five_minute_total > 0 else None,
-            "totalNotional": five_minute_total,
-            "count": sum(int(item.get("count") or 0) for item in five_minute.values()),
-        },
+        **normalized_windows,
     }
 
 

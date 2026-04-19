@@ -473,16 +473,24 @@ export type MarketIntelLiquidationDirection = {
   notional: number;
 };
 
+export type MarketIntelLiquidationWindow = {
+  byDirection: Record<'long' | 'short' | 'unknown', MarketIntelLiquidationDirection>;
+  longNotionalRatio: number | null;
+  shortNotionalRatio: number | null;
+  totalNotional: number;
+  count: number;
+  maxEventNotional?: number | null;
+  maxEventShare?: number | null;
+  notionalPerMinute?: number;
+  eventsPerMinute?: number;
+};
+
 export type MarketIntelLiquidationAggregate = {
   byDirection: Record<'long' | 'short' | 'unknown', MarketIntelLiquidationDirection>;
   maxEvent: MarketIntelLiquidation | null;
-  last5m: {
-    byDirection: Record<'long' | 'short' | 'unknown', MarketIntelLiquidationDirection>;
-    longNotionalRatio: number | null;
-    shortNotionalRatio: number | null;
-    totalNotional: number;
-    count: number;
-  };
+  last5m: MarketIntelLiquidationWindow;
+  last15m?: MarketIntelLiquidationWindow;
+  last60m?: MarketIntelLiquidationWindow;
 };
 
 export type MarketIntelStreamStatus = {

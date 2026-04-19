@@ -12,6 +12,7 @@ import type {
   MarketIntelLevel,
   MarketIntelLiquidation,
   MarketIntelLiquidationAggregate,
+  MarketIntelLiquidationWindow,
   MarketIntelOrderbook,
   MarketIntelRollingCorrelation,
   MarketIntelSessionHeatmapCell,
@@ -3090,6 +3091,24 @@ function liquidationSideText(side?: string) {
   return byLang('未知方向', 'Unknown side');
 }
 
+function createEmptyLiquidationWindow(): MarketIntelLiquidationWindow {
+  return {
+    byDirection: {
+      long: { count: 0, notional: 0 },
+      short: { count: 0, notional: 0 },
+      unknown: { count: 0, notional: 0 },
+    },
+    longNotionalRatio: null,
+    shortNotionalRatio: null,
+    totalNotional: 0,
+    count: 0,
+    maxEventNotional: null,
+    maxEventShare: null,
+    notionalPerMinute: 0,
+    eventsPerMinute: 0,
+  };
+}
+
 function LiquidationPanel({
   rows,
   status,
@@ -3107,15 +3126,16 @@ function LiquidationPanel({
     };
     let maxEvent: MarketIntelLiquidation | null = null;
     const now = Date.now();
-    const last5m = {
-      byDirection: {
-        long: { count: 0, notional: 0 },
-        short: { count: 0, notional: 0 },
-        unknown: { count: 0, notional: 0 },
-      },
-      totalNotional: 0,
-      count: 0,
+    const windows = {
+      last5m: createEmptyLiquidationWindow(),
+      last15m: createEmptyLiquidationWindow(),
+      last60m: createEmptyLiquidationWindow(),
     };
+    const windowSpecs = [
+      ['last5m', 5 * 60 * 1000, 5],
+      ['last15m', 15 * 60 * 1000, 15],
+      ['last60m', 60 * 60 * 1000, 60],
+    ] as const;
     for (const row of rows) {
       const side = String(row.side ?? '').toUpperCase();
       const direction = side === 'SELL' ? 'long' : side === 'BUY' ? 'short' : 'unknown';
@@ -3123,27 +3143,49 @@ function LiquidationPanel({
       byDirection[direction].notional += row.notional;
       if (!maxEvent || row.notional > maxEvent.notional) maxEvent = row;
       const ts = Date.parse(row.ts);
-      if (Number.isFinite(ts) && now - ts <= 5 * 60 * 1000) {
-        last5m.byDirection[direction].count += 1;
-        last5m.byDirection[direction].notional += row.notional;
-        last5m.totalNotional += row.notional;
-        last5m.count += 1;
+      for (const [key, ms] of windowSpecs) {
+        if (Number.isFinite(ts) && now - ts <= ms) {
+          const window = windows[key];
+          window.byDirection[direction].count += 1;
+          window.byDirection[direction].notional += row.notional;
+          window.totalNotional += row.notional;
+          window.count += 1;
+          window.maxEventNotional = Math.max(window.maxEventNotional ?? 0, row.notional);
+        }
       }
+    }
+    for (const [key, , minutes] of windowSpecs) {
+      const window = windows[key];
+      window.longNotionalRatio = window.totalNotional > 0 ? window.byDirection.long.notional / window.totalNotional : null;
+      window.shortNotionalRatio = window.totalNotional > 0 ? window.byDirection.short.notional / window.totalNotional : null;
+      window.maxEventShare = window.totalNotional > 0 ? (window.maxEventNotional ?? 0) / window.totalNotional : null;
+      window.notionalPerMinute = window.totalNotional / minutes;
+      window.eventsPerMinute = window.count / minutes;
     }
     return {
       byDirection,
       maxEvent,
-      last5m: {
-        ...last5m,
-        longNotionalRatio: last5m.totalNotional > 0 ? last5m.byDirection.long.notional / last5m.totalNotional : null,
-        shortNotionalRatio: last5m.totalNotional > 0 ? last5m.byDirection.short.notional / last5m.totalNotional : null,
-      },
+      ...windows,
     };
   }, [rows]);
   const aggregate = apiAggregate ?? fallbackAggregate;
   const latestLiquidationTs = rows[0]?.ts;
-  const last5mTotalNotional = aggregate.last5m.totalNotional ?? 0;
-  const hasRecentLiquidations = aggregate.last5m.count > 0;
+  const last5m = aggregate.last5m;
+  const last15m = aggregate.last15m ?? createEmptyLiquidationWindow();
+  const last60m = aggregate.last60m ?? createEmptyLiquidationWindow();
+  const last5mTotalNotional = last5m.totalNotional ?? 0;
+  const hasRecentLiquidations = last5m.count > 0;
+  const liquidationIntensity = last5m.totalNotional > 0
+    ? byLang('最近 5 分钟出现强平', 'Forced orders in the last 5m')
+    : last15m.totalNotional > 0
+      ? byLang('最近 15 分钟有强平背景', 'Forced-order background in the last 15m')
+      : byLang('近期未见强平压力', 'No recent forced-order pressure');
+  const concentrationWarning = (last15m.maxEventShare ?? 0) >= 0.5;
+  const windowRows = [
+    { key: '5m', window: byLang('最近 5 分钟', 'Last 5m'), data: last5m },
+    { key: '15m', window: byLang('最近 15 分钟', 'Last 15m'), data: last15m },
+    { key: '60m', window: byLang('最近 60 分钟', 'Last 60m'), data: last60m },
+  ];
 
   return (
     <Card title={byLang('爆仓流', 'Liquidations')}>
@@ -3158,6 +3200,15 @@ function LiquidationPanel({
         </Typography.Text>
       ) : (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type={hasRecentLiquidations || concentrationWarning ? 'warning' : 'info'}
+            showIcon
+            message={liquidationIntensity}
+            description={byLang(
+              '强平数据用于监测事件冲击和仓位压力背景；没有强平是正常空状态，不是采集错误。',
+              'Forced-order data monitors event shocks and positioning-pressure context; no forced orders is a normal empty state, not a collection error.',
+            )}
+          />
           <Row gutter={[12, 12]}>
             <Col xs={12} md={6}>
               <Statistic title={byLang('多头爆仓名义额', 'Long liq notional')} value={aggregate.byDirection.long.notional} precision={0} />
@@ -3169,10 +3220,19 @@ function LiquidationPanel({
               <Statistic title={byLang('最大单笔', 'Largest order')} value={aggregate.maxEvent?.notional ?? 0} precision={0} />
             </Col>
             <Col xs={12} md={6}>
-              <Statistic title={byLang('最近 5 分钟笔数', 'Last 5m orders')} value={aggregate.last5m.count} />
+              <Statistic title={byLang('最近 5 分钟笔数', 'Last 5m orders')} value={last5m.count} />
             </Col>
             <Col xs={12} md={6}>
               <Statistic title={byLang('最近 5 分钟名义额', 'Last 5m notional')} value={last5mTotalNotional} precision={0} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('15 分钟名义额速度', '15m notional velocity')} value={formatNumber(last15m.notionalPerMinute ?? 0, 0)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('15 分钟事件速度', '15m event velocity')} value={`${formatNumber(last15m.eventsPerMinute ?? 0, 2)}/m`} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('15 分钟最大单笔占比', '15m max-event share')} value={last15m.maxEventShare == null ? '-' : formatPercent(last15m.maxEventShare)} />
             </Col>
             <Col xs={12} md={6}>
               <Statistic title={byLang('最近记录', 'Latest record')} value={latestLiquidationTs ? freshnessText(latestLiquidationTs) : '-'} />
@@ -3192,16 +3252,29 @@ function LiquidationPanel({
           <div>
             <Space wrap style={{ marginBottom: 6 }}>
               <Typography.Text type="secondary">{byLang('最近 5 分钟多空名义额比例', 'Last 5m long/short notional ratio')}</Typography.Text>
-              <Tag color="red">{byLang('多头爆仓', 'Long liq')}: {aggregate.last5m.longNotionalRatio == null ? '-' : formatPercent(aggregate.last5m.longNotionalRatio)}</Tag>
-              <Tag color="blue">{byLang('空头爆仓', 'Short liq')}: {aggregate.last5m.shortNotionalRatio == null ? '-' : formatPercent(aggregate.last5m.shortNotionalRatio)}</Tag>
+              <Tag color="red">{byLang('多头爆仓', 'Long liq')}: {last5m.longNotionalRatio == null ? '-' : formatPercent(last5m.longNotionalRatio)}</Tag>
+              <Tag color="blue">{byLang('空头爆仓', 'Short liq')}: {last5m.shortNotionalRatio == null ? '-' : formatPercent(last5m.shortNotionalRatio)}</Tag>
             </Space>
             <Progress
-              percent={Math.round((aggregate.last5m.longNotionalRatio ?? 0) * 100)}
-              success={{ percent: Math.round((aggregate.last5m.shortNotionalRatio ?? 0) * 100), strokeColor: '#1677ff' }}
+              percent={Math.round((last5m.longNotionalRatio ?? 0) * 100)}
+              success={{ percent: Math.round((last5m.shortNotionalRatio ?? 0) * 100), strokeColor: '#1677ff' }}
               strokeColor="#ff4d4f"
               showInfo={false}
             />
           </div>
+          <Table
+            size="small"
+            pagination={false}
+            dataSource={windowRows}
+            columns={[
+              { title: byLang('窗口', 'Window'), dataIndex: 'window' },
+              { title: byLang('笔数', 'Events'), dataIndex: 'data', render: (item: typeof last5m) => item.count },
+              { title: byLang('名义额', 'Notional'), dataIndex: 'data', render: (item: typeof last5m) => formatNumber(item.totalNotional, 0) },
+              { title: byLang('名义额速度', 'Notional velocity'), dataIndex: 'data', responsive: ['md'], render: (item: typeof last5m) => formatNumber(item.notionalPerMinute ?? 0, 0) },
+              { title: byLang('事件速度', 'Event velocity'), dataIndex: 'data', responsive: ['md'], render: (item: typeof last5m) => `${formatNumber(item.eventsPerMinute ?? 0, 2)}/m` },
+              { title: byLang('最大单笔占比', 'Max-event share'), dataIndex: 'data', responsive: ['lg'], render: (item: typeof last5m) => item.maxEventShare == null ? '-' : formatPercent(item.maxEventShare) },
+            ]}
+          />
           <Table
             size="small"
             pagination={false}
