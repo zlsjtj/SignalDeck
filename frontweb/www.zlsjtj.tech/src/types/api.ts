@@ -418,6 +418,14 @@ export type MarketIntelRollingCorrelation = {
   right: string;
   points: MarketIntelRollingCorrelationPoint[];
   window: number;
+  current?: number;
+  recentMean?: number;
+  recentMin?: number;
+  recentMax?: number;
+  changeFromMean?: number;
+  rangeWidth?: number;
+  coverageRatio?: number;
+  pointCount?: number;
 };
 
 export type MarketIntelCorrelationBreak = {

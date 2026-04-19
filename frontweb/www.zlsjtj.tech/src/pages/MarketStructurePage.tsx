@@ -2249,6 +2249,29 @@ function RollingCorrelationPanel({
     })
     .filter((item): item is { pair: string; correlation: number; samples: number; ts: string } => Boolean(item)), [seriesRows]);
   const latestCorrelationRows = useMemo(() => [...latestCorrelationPoints].sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)), [latestCorrelationPoints]);
+  const correlationStructureRows = useMemo(() => seriesRows
+    .map((row) => {
+      const latest = row.points.at(-1);
+      const current = row.current ?? latest?.correlation ?? null;
+      const recentMean = row.recentMean ?? null;
+      const changeFromMean = row.changeFromMean ?? (current != null && recentMean != null ? current - recentMean : null);
+      const coverageRatio = row.coverageRatio ?? Math.min(1, row.points.length / 48);
+      return {
+        key: row.pair,
+        pair: compactPair(row.left, row.right),
+        current,
+        recentMean,
+        changeFromMean,
+        recentMin: row.recentMin ?? null,
+        recentMax: row.recentMax ?? null,
+        rangeWidth: row.rangeWidth ?? null,
+        coverageRatio,
+        pointCount: row.pointCount ?? row.points.length,
+        samples: latest?.samples ?? row.window,
+        ts: latest?.ts ?? '',
+      };
+    })
+    .sort((a, b) => Math.abs(b.changeFromMean ?? 0) - Math.abs(a.changeFromMean ?? 0)), [seriesRows]);
   const latestAverageCorrelation = latestCorrelationPoints.length > 0
     ? latestCorrelationPoints.reduce((sum, item) => sum + item.correlation, 0) / latestCorrelationPoints.length
     : null;
@@ -2261,6 +2284,11 @@ function RollingCorrelationPanel({
   const weakCorrelationCount = latestCorrelationPoints.length - positiveCorrelationCount - negativeCorrelationCount;
   const minLatestSamples = latestCorrelationPoints.length > 0 ? Math.min(...latestCorrelationPoints.map((item) => item.samples)) : 0;
   const sparseCorrelationSample = seriesRows.length > 0 && (seriesRows.length < 2 || totalRollingPoints < 24 || minLatestSamples < 12);
+  const largestCorrelationShift = correlationStructureRows[0];
+  const averageCoverage = correlationStructureRows.length > 0
+    ? correlationStructureRows.reduce((sum, row) => sum + row.coverageRatio, 0) / correlationStructureRows.length
+    : null;
+  const unstableCorrelationCount = correlationStructureRows.filter((row) => Math.abs(row.changeFromMean ?? 0) >= 0.25).length;
   const option = useMemo(() => {
     const timestamps = Array.from(new Set(seriesRows.flatMap((row) => row.points.map((point) => point.ts)))).sort();
     const pointLookup = new Map<string, Map<string, { correlation: number; samples: number }>>();
@@ -2350,6 +2378,15 @@ function RollingCorrelationPanel({
             <Col xs={12} md={6}>
               <Statistic title={byLang('最弱当前相关', 'Weakest current corr')} value={weakestCorrelation ? `${weakestCorrelation.pair} ${weakestCorrelation.correlation.toFixed(2)}` : '-'} />
             </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('最大均值偏离', 'Largest mean shift')} value={largestCorrelationShift?.changeFromMean == null ? '-' : `${largestCorrelationShift.pair} ${largestCorrelationShift.changeFromMean.toFixed(2)}`} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('平均覆盖', 'Avg coverage')} value={averageCoverage == null ? '-' : formatPercent(averageCoverage)} />
+            </Col>
+            <Col xs={12} md={6}>
+              <Statistic title={byLang('偏离监控数', 'Shift monitors')} value={unstableCorrelationCount} />
+            </Col>
           </Row>
         ) : null}
         <Space wrap>
@@ -2359,6 +2396,9 @@ function RollingCorrelationPanel({
           <Tag>{byLang('弱 / 中性', 'Weak / neutral')}: {weakCorrelationCount}</Tag>
           <Tag color={sparseCorrelationSample ? 'gold' : 'green'}>
             {sparseCorrelationSample ? byLang('样本偏薄', 'Thin samples') : byLang('样本覆盖正常', 'Coverage normal')}
+          </Tag>
+          <Tag color={unstableCorrelationCount > 0 ? 'gold' : 'green'}>
+            {byLang('均值偏离', 'Mean shifts')}: {unstableCorrelationCount}
           </Tag>
           {strongestCorrelation ? <Tag>{byLang('最强样本', 'Strongest samples')}: {strongestCorrelation.samples}</Tag> : null}
           {weakestCorrelation ? <Tag>{byLang('最弱样本', 'Weakest samples')}: {weakestCorrelation.samples}</Tag> : null}
@@ -2411,6 +2451,35 @@ function RollingCorrelationPanel({
         ) : (
           <ReactECharts option={option} style={{ height: 260 }} notMerge lazyUpdate />
         )}
+        {correlationStructureRows.length > 0 ? (
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Typography.Text strong>{byLang('联动变化排行', 'Linkage change ranking')}</Typography.Text>
+            <Typography.Text type="secondary">
+              {byLang(
+                '表格按当前相关相对近期均值的偏离排序，用于发现联动结构变化；覆盖率不足时应降低解读权重。',
+                'Rows are sorted by current correlation deviation from the recent mean to surface linkage-structure changes; reduce weight when coverage is thin.',
+              )}
+            </Typography.Text>
+            <Table
+              size="small"
+              pagination={false}
+              dataSource={correlationStructureRows}
+              columns={[
+                { title: byLang('交易对', 'Pair'), dataIndex: 'pair' },
+                { title: byLang('当前', 'Current'), dataIndex: 'current', render: (v: number | null) => v == null ? '-' : v.toFixed(2) },
+                { title: byLang('近期均值', 'Recent mean'), dataIndex: 'recentMean', responsive: ['md'], render: (v: number | null) => v == null ? '-' : v.toFixed(2) },
+                {
+                  title: byLang('偏离', 'Shift'),
+                  dataIndex: 'changeFromMean',
+                  render: (v: number | null) => v == null ? '-' : <Typography.Text style={{ color: v >= 0 ? '#ff4d4f' : '#1677ff' }}>{v > 0 ? '+' : ''}{v.toFixed(2)}</Typography.Text>,
+                },
+                { title: byLang('近期区间', 'Recent range'), dataIndex: 'rangeWidth', responsive: ['lg'], render: (_: number | null, row: typeof correlationStructureRows[number]) => row.recentMin == null || row.recentMax == null ? '-' : `${row.recentMin.toFixed(2)} / ${row.recentMax.toFixed(2)}` },
+                { title: byLang('覆盖', 'Coverage'), dataIndex: 'coverageRatio', responsive: ['md'], render: (v: number) => formatPercent(v) },
+                { title: byLang('点数', 'Points'), dataIndex: 'pointCount', responsive: ['lg'] },
+              ]}
+            />
+          </Space>
+        ) : null}
         {latestCorrelationPoints.length > 0 ? (
           <Space direction="vertical" size={6} style={{ width: '100%' }}>
             <Typography.Text strong>{byLang('当前相关截面', 'Current correlation snapshot')}</Typography.Text>

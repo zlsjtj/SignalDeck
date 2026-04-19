@@ -532,6 +532,14 @@ def _rolling_correlation_series(
                 }
             )
         if points:
+            values = [_to_float(point.get("correlation")) for point in points]
+            latest = values[-1]
+            previous = values[:-1]
+            recent = previous[-12:] if previous else []
+            recent_mean = sum(recent) / len(recent) if recent else latest
+            recent_min = min(recent) if recent else latest
+            recent_max = max(recent) if recent else latest
+            coverage_ratio = min(1.0, len(points) / 48.0)
             out.append(
                 {
                     "pair": f"{_ccxt_symbol(left, 'futures')}|{_ccxt_symbol(right, 'futures')}",
@@ -539,6 +547,14 @@ def _rolling_correlation_series(
                     "right": _ccxt_symbol(right, "futures"),
                     "points": points[-48:],
                     "window": window,
+                    "current": latest,
+                    "recentMean": recent_mean,
+                    "recentMin": recent_min,
+                    "recentMax": recent_max,
+                    "changeFromMean": latest - recent_mean,
+                    "rangeWidth": recent_max - recent_min,
+                    "coverageRatio": coverage_ratio,
+                    "pointCount": len(points),
                 }
             )
     return out
