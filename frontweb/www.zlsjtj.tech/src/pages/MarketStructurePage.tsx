@@ -951,6 +951,12 @@ function microstructureReadabilityTag(score: number) {
   return <Tag color="orange">{byLang('明显降权', 'Lower weight')}</Tag>;
 }
 
+function reviewStatusTag(status: 'ok' | 'watch' | 'risk') {
+  if (status === 'ok') return <Tag color="green">{byLang('通过', 'OK')}</Tag>;
+  if (status === 'watch') return <Tag color="gold">{byLang('观察', 'Watch')}</Tag>;
+  return <Tag color="orange">{byLang('降权', 'Lower weight')}</Tag>;
+}
+
 function MicrostructureFocusPanel({
   venue,
   secondaryVenue,
@@ -987,6 +993,13 @@ function MicrostructureFocusPanel({
   const liveFreshnessMs = latestLiveTs ? Date.parse(latestLiveTs) : Number.NaN;
   const liveFreshnessSeconds = Number.isFinite(liveFreshnessMs) ? Math.max(0, Math.round((Date.now() - liveFreshnessMs) / 1000)) : null;
   const freshnessQuality = liveFreshnessSeconds == null ? 0 : Math.max(0, Math.min(1, 1 - liveFreshnessSeconds / 120));
+  const bookFreshnessSeconds = ageSeconds(orderbookTimestamp(book, streamBook));
+  const bookTopConcentration = book?.topConcentration ?? Math.max(book?.topBidShare ?? 0, book?.topAskShare ?? 0);
+  const secondaryFlowDirection = pressureDirection(secondaryVenue?.flow?.tradeImbalance);
+  const crossVenueDisagree = (
+    (liveFlowDirection === 'buy' && secondaryFlowDirection === 'sell')
+    || (liveFlowDirection === 'sell' && secondaryFlowDirection === 'buy')
+  );
   const agreementPenalty = Math.min(1, Math.max(
     restLiveGap == null ? 0 : Math.abs(restLiveGap) / 0.5,
     flowOfiGap == null ? 0 : Math.abs(flowOfiGap) / 0.5,
@@ -1010,6 +1023,87 @@ function MicrostructureFocusPanel({
     restLiveGap != null && Math.abs(restLiveGap) >= PRESSURE_THRESHOLD ? byLang('REST 与 Live Taker ratio 差异较大，说明短窗流向和最近聚合成交不一致。', 'REST and Live taker ratio differ materially, so short-window flow and recent aggregated trades disagree.') : '',
     flowOfiGap != null && Math.abs(flowOfiGap) >= PRESSURE_THRESHOLD ? byLang('实时成交流与 OFI 差异较大，主动成交和订单薄更新压力不一致。', 'Live flow and OFI differ materially, so aggressive trades and book-update pressure disagree.') : '',
   ].filter(Boolean);
+  const reviewRows = [
+    {
+      key: 'coverage',
+      item: byLang('实时窗口覆盖', 'Live window coverage'),
+      status: coverageRatio >= 0.8 ? 'ok' : coverageRatio >= 0.5 ? 'watch' : 'risk',
+      value: formatPercent(coverageRatio),
+      detail: byLang(
+        '窗口覆盖不足时，短窗 Taker / OFI 更容易受启动、重连或少数样本影响。',
+        'When coverage is thin, short-window Taker / OFI is more sensitive to startup, reconnects or a few samples.',
+      ),
+    },
+    {
+      key: 'freshness',
+      item: byLang('实时样本新鲜度', 'Live sample freshness'),
+      status: liveFreshnessSeconds == null ? 'risk' : liveFreshnessSeconds <= 30 ? 'ok' : liveFreshnessSeconds <= 120 ? 'watch' : 'risk',
+      value: liveFreshnessSeconds == null ? '-' : `${liveFreshnessSeconds}s`,
+      detail: byLang(
+        '实时样本过旧时，先看采集器状态，再解读方向。',
+        'When live samples are stale, check collector status before reading direction.',
+      ),
+    },
+    {
+      key: 'rest-live',
+      item: byLang('REST / Live 一致性', 'REST / Live agreement'),
+      status: restLiveGap == null ? 'watch' : Math.abs(restLiveGap) < PRESSURE_THRESHOLD ? 'ok' : Math.abs(restLiveGap) < PRESSURE_THRESHOLD * 2 ? 'watch' : 'risk',
+      value: restLiveGap == null ? '-' : signedPercent(restLiveGap),
+      detail: byLang(
+        '差异扩大表示最近聚合成交与当前实时短窗不是同一方向。',
+        'A wider gap means recent aggregated trades and the current live window are not pointing the same way.',
+      ),
+    },
+    {
+      key: 'flow-ofi',
+      item: byLang('Flow / OFI 一致性', 'Flow / OFI agreement'),
+      status: flowOfiGap == null ? 'watch' : Math.abs(flowOfiGap) < PRESSURE_THRESHOLD ? 'ok' : Math.abs(flowOfiGap) < PRESSURE_THRESHOLD * 2 ? 'watch' : 'risk',
+      value: flowOfiGap == null ? '-' : signedPercent(flowOfiGap),
+      detail: byLang(
+        '主动成交和订单薄更新压力背离时，应把它当成结构变化提示，而不是单向结论。',
+        'When aggressive flow and book-update pressure diverge, treat it as a structure-change monitor, not a one-way conclusion.',
+      ),
+    },
+    {
+      key: 'book-quality',
+      item: byLang('订单薄集中度', 'Book concentration'),
+      status: bookTopConcentration < 0.25 ? 'ok' : bookTopConcentration < 0.4 ? 'watch' : 'risk',
+      value: formatPercent(bookTopConcentration),
+      detail: byLang(
+        '单档集中度越高，撤单对显示深度和偏斜的影响越大。',
+        'Higher one-level concentration means cancellations can move displayed depth and skew more sharply.',
+      ),
+    },
+    {
+      key: 'book-freshness',
+      item: byLang('订单薄快照新鲜度', 'Book snapshot freshness'),
+      status: bookFreshnessSeconds == null ? 'watch' : bookFreshnessSeconds <= 30 ? 'ok' : bookFreshnessSeconds <= 120 ? 'watch' : 'risk',
+      value: bookFreshnessSeconds == null ? '-' : `${bookFreshnessSeconds}s`,
+      detail: byLang(
+        '订单薄是显示流动性快照，过旧时只适合看采集状态。',
+        'The book is a displayed-liquidity snapshot; when stale, use it mainly to check collection state.',
+      ),
+    },
+    {
+      key: 'cross-venue',
+      item: byLang('Spot / Futures 交叉检查', 'Spot / Futures cross-check'),
+      status: crossVenueDisagree ? 'watch' : secondaryFlowDirection === 'unknown' ? 'watch' : 'ok',
+      value: signedPercent(secondaryVenue?.flow?.tradeImbalance),
+      detail: byLang(
+        '主辅市场方向不一致时，优先把它标为结构背离背景。',
+        'When primary and secondary venues disagree, treat it as divergence context first.',
+      ),
+    },
+  ] as Array<{ key: string; item: string; status: 'ok' | 'watch' | 'risk'; value: string; detail: string }>;
+  const reviewRiskCount = reviewRows.filter((row) => row.status === 'risk').length;
+  const reviewWatchCount = reviewRows.filter((row) => row.status === 'watch').length;
+  const reviewReadyCount = reviewRows.length - reviewRiskCount - reviewWatchCount;
+  const reviewScore = Math.round((reviewReadyCount / reviewRows.length) * 100);
+  const reviewMessage = reviewRiskCount > 0
+    ? byLang('复核清单提示需要降权', 'Review checklist indicates lower weight')
+    : reviewWatchCount > 0
+      ? byLang('复核清单存在观察项', 'Review checklist has watch items')
+      : byLang('复核清单未发现主要质量问题', 'Review checklist found no major quality issue');
   const diagnosticRows = [
     {
       key: 'rest-flow',
@@ -1218,6 +1312,26 @@ function MicrostructureFocusPanel({
               </Typography.Text>
             </Space>
           }
+        />
+        <Alert
+          type={reviewRiskCount > 0 ? 'warning' : reviewWatchCount > 0 ? 'info' : 'success'}
+          showIcon
+          message={reviewMessage}
+          description={byLang(
+            `复核得分 ${reviewScore}%，通过 ${reviewReadyCount} 项，观察 ${reviewWatchCount} 项，降权 ${reviewRiskCount} 项。清单用于决定监控权重，不构成交易建议。`,
+            `Review score ${reviewScore}%, with ${reviewReadyCount} OK, ${reviewWatchCount} watch and ${reviewRiskCount} lower-weight items. The checklist is for monitoring weight, not trading advice.`,
+          )}
+        />
+        <Table
+          size="small"
+          pagination={false}
+          dataSource={reviewRows}
+          columns={[
+            { title: byLang('复核项', 'Review item'), dataIndex: 'item' },
+            { title: byLang('状态', 'Status'), dataIndex: 'status', render: (status: 'ok' | 'watch' | 'risk') => reviewStatusTag(status) },
+            { title: byLang('当前值', 'Current'), dataIndex: 'value' },
+            { title: byLang('解读', 'Read'), dataIndex: 'detail', responsive: ['md'] },
+          ]}
         />
         {timestamps.length === 0 ? (
           <Empty description={byLang('等待实时 Taker / OFI 序列样本', 'Waiting for live Taker / OFI series samples')} />
